@@ -1,114 +1,107 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# MontePica Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+API REST construida con NestJS, PostgreSQL y TypeORM. El backend se desarrolla por módulos; por ahora incluye configuración, conexión a PostgreSQL local, migraciones, documentación OpenAPI y comprobaciones de estado.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Requisitos
 
-## Description
+- Node.js compatible con las dependencias del proyecto.
+- PostgreSQL instalado y activo en la máquina.
+- Una base y un usuario dedicados para MontePica.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+La instalación local de PostgreSQL no será modificada ni se borrarán otras bases. Ejecuta una sola vez estos comandos conectado a la base `postgres` con un usuario administrador; reemplaza la contraseña de ejemplo por una propia antes de ejecutarlos:
 
-## Project setup
-
-```bash
-$ npm install
+```sql
+CREATE ROLE monte_pica_app LOGIN PASSWORD 'reemplaza_esta_clave';
+CREATE DATABASE monte_pica OWNER monte_pica_app;
 ```
 
-## Compile and run the project
+Si la base o el rol ya existen, no vuelvas a ejecutar esas sentencias; comprueba la configuración existente y úsala.
 
-```bash
-# development
-$ npm run start
+## Configuración
 
-# watch mode
-$ npm run start:dev
+Desde esta carpeta, crea tu archivo local de entorno:
 
-# production mode
-$ npm run start:prod
+```powershell
+Copy-Item .env.example .env
 ```
 
-## Run tests
+Edita `.env` con la contraseña elegida y los datos de tu PostgreSQL. El archivo `.env` está excluido de Git. Las variables disponibles son:
+
+| Variable | Uso | Valor local de ejemplo |
+|---|---|---|
+| `NODE_ENV` | Entorno de ejecución | `development` |
+| `PORT` | Puerto HTTP de la API | `3000` |
+| `DB_HOST` | Servidor PostgreSQL | `127.0.0.1` |
+| `DB_PORT` | Puerto PostgreSQL | `5432` |
+| `DB_USERNAME` | Usuario exclusivo de la API | `monte_pica_app` |
+| `DB_PASSWORD` | Contraseña del usuario | La que configuraste |
+| `DB_NAME` | Base de datos de la aplicación | `monte_pica` |
+| `DB_LOGGING` | Consultas SQL en el log | `false` |
+| `CORS_ORIGINS` | Orígenes web separados por coma | `http://localhost:8081,http://localhost:19006` |
+
+El proceso valida la configuración al arrancar y muestra qué variable falta o es inválida. CORS queda cerrado para orígenes web que no aparezcan en `CORS_ORIGINS`; las aplicaciones móviles nativas no usan esa política del navegador.
+
+## Instalación y ejecución
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm install
+npm run build
+npm run start:dev
 ```
 
-## Deployment
+La API escucha en `http://localhost:3000`. NestJS se enlaza a las interfaces de red locales para permitir solicitudes desde el emulador o dispositivo que comparta la red.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Endpoints disponibles
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+- `GET /api/v1/health`: informa que el proceso HTTP está activo.
+- `GET /api/v1/health/ready`: ejecuta `SELECT 1` y responde `503` si PostgreSQL no está disponible.
+- `GET /docs`: interfaz Swagger para explorar los endpoints.
+- `GET /docs-json`: documento OpenAPI generado.
+
+## Catálogo (etapa 2)
+
+Las categorías y productos se gestionan mediante migraciones; la API solo expone consultas públicas por ahora.
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm run migration:run
+npm run seed:catalog
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+`seed:catalog` es opcional y solo carga ejemplos en la base indicada por `.env`. Inserta Ceviches, Bebidas y los seis productos del prototipo; puede repetirse sin duplicar ni sobrescribir registros. Los ejemplos no asignan URL de imagen ni existencias.
 
-## Observability
+Endpoints disponibles:
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+- `GET /api/v1/categories`: categorías activas ordenadas por posición.
+- `GET /api/v1/products?categoryId=<uuid>&search=ceviche&page=1&limit=20`: productos activos y visibles, con filtro de categoría y búsqueda opcionales. `limit` admite de 1 a 100.
+- `GET /api/v1/products/<uuid>`: detalle de un producto visible.
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+El precio se entrega como entero en centavos (`650` representa USD 6.50). Las listas de productos responden `{ items, total, page, limit }`. Los productos inactivos, ocultos o asociados a una categoría inactiva no aparecen en el catálogo.
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+## Migraciones
 
-## Resources
+La sincronización automática del esquema está desactivada. Las tablas se añadirán mediante migraciones conforme se implementen los módulos del negocio.
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+# Crear una migración vacía para editar manualmente
+npm run migration:create -- src/database/migrations/NombreDeLaMigracion
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observer](https://observer.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+# Generar una migración a partir de diferencias entre entidades y esquema
+npm run migration:generate -- src/database/migrations/NombreDeLaMigracion
 
-## Support
+# Consultar, ejecutar o revertir migraciones
+npm run migration:show
+npm run migration:run
+npm run migration:revert
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+La generación requiere que ya existan entidades de TypeORM y cambios detectables. Revisa cada migración generada antes de aplicarla. Las tablas de negocio no se crean automáticamente.
 
-## Stay in touch
+## Comprobaciones
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```bash
+npm run build
+npm test
+npm run test:e2e
+```
 
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Las pruebas de los endpoints de estado usan una conexión simulada para comprobar la respuesta HTTP y el documento OpenAPI sin depender de credenciales locales. Para comprobar PostgreSQL real, configura `.env`, inicia la API y consulta `/api/v1/health/ready`.
