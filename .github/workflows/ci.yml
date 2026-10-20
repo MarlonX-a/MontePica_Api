@@ -48,5 +48,5 @@ jobs:
       - name: Configuración y variables de entorno
         run: npm run test -- src/config/environment.validation.spec.ts
 
-      - name: API E2E: salud, contratos de autenticación y rutas administrativas
+      - name: API E2E - salud, contratos de autenticación y rutas administrativas
         run: npm run test:e2e
