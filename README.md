@@ -157,4 +157,8 @@ npm test
 npm run test:e2e
 ```
 
+## Integracion continua
+
+GitHub Actions ejecuta estas comprobaciones en cada push y pull request hacia `main`, usando Node.js 24: compilacion, lint, pruebas de login, permisos, administracion, catalogo y configuracion, ademas de las pruebas E2E de salud y contratos de la API.
+
 Las pruebas de los endpoints de estado usan una conexión simulada para comprobar la respuesta HTTP y el documento OpenAPI sin depender de credenciales locales. Para comprobar PostgreSQL real, configura `.env`, inicia la API y consulta `/api/v1/health/ready`.
