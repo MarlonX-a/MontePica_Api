@@ -81,7 +81,7 @@ export class CatalogService {
       priceCents: product.priceCents,
       currency: 'USD',
       imageUrl: product.imageUrl,
-      category: { id: product.category.id, name: product.category.name },
+      category: product.category ? { id: product.category.id, name: product.category.name } : null,
       tracksInventory: product.tracksInventory,
       sortOrder: product.sortOrder,
     };

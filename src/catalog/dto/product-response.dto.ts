@@ -30,8 +30,8 @@ export class ProductResponseDto {
   @ApiPropertyOptional({ nullable: true, format: 'uri' })
   imageUrl: string | null;
 
-  @ApiProperty({ type: ProductCategoryResponseDto })
-  category: ProductCategoryResponseDto;
+  @ApiProperty({ type: ProductCategoryResponseDto, nullable: true })
+  category: ProductCategoryResponseDto | null;
 
   @ApiProperty()
   tracksInventory: boolean;
