@@ -4,7 +4,6 @@ import { AuthAccessGuard } from '../auth/auth-access.guard.js';
 import { PermissionsGuard } from '../auth/permissions.guard.js';
 import { RequirePermission } from '../auth/permissions.decorator.js';
 import { CurrentUserContext } from '../auth/current-user.decorator.js';
-import { PublicRoute } from '../auth/public-route.decorator.js';
 import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { AdminService } from './admin.service.js';
 import { ListAdminQueryDto } from './dto/list-admin-query.dto.js';
@@ -33,8 +32,7 @@ export class AdminController {
 
   @Get('products') @RequirePermission('catalog.read') products(@Query() q:ListAdminQueryDto){return this.admin.listProducts(q);}
   @Get('products/:id') @RequirePermission('catalog.read') product(@Param('id',ParseUUIDPipe) id:string){return this.admin.getProduct(id);}
-  // TEMPORARY: public access for the user's product-creation test; restore guards afterwards.
-  @Post('products') @PublicRoute() @ApiOperation({ summary: 'Crea un producto (temporalmente público para pruebas).', security: [] }) createProduct(@Body() dto:CreateAdminProductDto){return this.admin.createProduct(dto,null);}
+  @Post('products') @RequirePermission('catalog.write') createProduct(@Body() dto:CreateAdminProductDto,@CurrentUserContext() actor:AuthenticatedRequestContext){return this.admin.createProduct(dto,actor);}
   @Patch('products/:id') @RequirePermission('catalog.write') updateProduct(@Param('id',ParseUUIDPipe) id:string,@Body() dto:UpdateAdminProductDto,@CurrentUserContext() actor:AuthenticatedRequestContext){return this.admin.updateProduct(id,dto,actor);}
   @Patch('products/:id/visibility') @RequirePermission('catalog.visibility') visibility(@Param('id',ParseUUIDPipe) id:string,@Body() dto:VisibilityDto,@CurrentUserContext() actor:AuthenticatedRequestContext){return this.admin.setVisibility(id,dto.visibleInMenu,actor);}
 }

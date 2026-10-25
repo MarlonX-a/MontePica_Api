@@ -4,7 +4,7 @@ import { IsBoolean, IsInt, IsOptional, IsString, IsUrl, IsUUID, Max, MaxLength, 
 export class CreateAdminProductDto {
   @ApiProperty({ example: 'ceviche-mixto' }) @IsString() @MinLength(1) @MaxLength(80) sku: string;
   @ApiProperty({ example: 'Ceviche mixto' }) @IsString() @MinLength(1) @MaxLength(180) name: string;
-  @ApiPropertyOptional({ format: 'uuid', description: 'Opcional temporalmente para pruebas.' }) @IsOptional() @IsUUID() categoryId?: string;
+  @ApiProperty({ format: 'uuid' }) @IsUUID() categoryId: string;
   @ApiProperty({ example: 950, minimum: 0 }) @IsInt() @Min(0) @Max(2147483647) priceCents: number;
   @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() @MaxLength(10000) description?: string | null;
   @ApiPropertyOptional({ nullable: true, format: 'uri' }) @IsOptional() @IsUrl({ protocols: ['http', 'https'], require_protocol: true }) @MaxLength(2048) imageUrl?: string | null;

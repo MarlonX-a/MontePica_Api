@@ -5,8 +5,6 @@ import type { Request } from 'express';
 import { User } from './entities/user.entity.js';
 import { UserSession } from './entities/user-session.entity.js';
 import { AuthenticatedRequestContext } from './auth.types.js';
-import { Reflector } from '@nestjs/core';
-import { PUBLIC_ROUTE } from './public-route.decorator.js';
 
 type AuthenticatedRequest = Request & { authContext?: AuthenticatedRequestContext };
 
@@ -15,13 +13,9 @@ export class AuthAccessGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly dataSource: DataSource,
-    private readonly reflector: Reflector,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    if (this.reflector.getAllAndOverride<boolean>(PUBLIC_ROUTE, [context.getHandler(), context.getClass()])) {
-      return true;
-    }
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
     const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];

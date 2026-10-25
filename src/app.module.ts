@@ -8,6 +8,7 @@ import { CatalogModule } from './catalog/catalog.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AdminModule } from './admin/admin.module.js';
+import { OperationsModule } from './operations/operations.module.js';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { AdminModule } from './admin/admin.module.js';
     CatalogModule,
     AuthModule,
     AdminModule,
+    OperationsModule,
   ],
 })
 export class AppModule {}

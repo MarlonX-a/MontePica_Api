@@ -43,7 +43,7 @@ export class Product {
   sortOrder: number;
 
   @ManyToOne(() => Category, {
-    nullable: true,
+    nullable: false,
     onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'id_categoria', referencedColumnName: 'id' })

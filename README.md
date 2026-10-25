@@ -130,6 +130,20 @@ Las listas usan `{ items, total, page, limit }`, con `page=1`, `limit=20` por de
 
 Las modificaciones administrativas y los cambios de contraseña registran auditoría dentro de la misma transacción. Cambiar correo, rol, estado o contraseña revoca las sesiones afectadas. Un administrador no puede cambiar su propio rol ni suspenderse, y la aplicación protege al último administrador activo.
 
+## Etapa 4A: configuración operativa y apertura
+
+La configuración operativa guarda la zona horaria del negocio y sus horas habituales de apertura y cierre. La zona horaria determina la fecha de negocio que se usa al abrir y consultar una jornada. Las horas son informativas en esta entrega; todavía no bloquean aperturas fuera de ese horario.
+
+Después de aplicar las migraciones, las cuentas con permisos pueden usar:
+
+- `GET /api/v1/admin/operations/settings`: configuración actual (`operations.read`).
+- `PATCH /api/v1/admin/operations/settings`: actualizar `timeZone`, `openingTime` o `closingTime` (`operations.manage`). Las horas usan `HH:mm` y la zona debe ser un identificador IANA, por ejemplo `America/Guayaquil`.
+- `GET /api/v1/admin/operations/current`: consultar la jornada y caja de la fecha operativa actual (`operations.read`).
+- `POST /api/v1/admin/operations/days/open`: abrir la jornada del día en la zona horaria configurada (`operations.open`). Solo se permite una jornada por fecha.
+- `POST /api/v1/admin/operations/cash/open`: abrir la caja de la jornada abierta con `{ "openingAmountCents": 5000 }` (`operations.open`). El fondo inicial se registra en centavos de USD; solo existe una caja por jornada en esta etapa.
+
+El administrador recibe `operations.read`, `operations.manage` y `operations.open`. El trabajador puede consultar el estado y abrir jornada/caja. Clientes no tienen estos permisos. Las aperturas y cambios de configuración quedan auditados dentro de la transacción correspondiente. Esta etapa no incluye movimientos de efectivo, cierre de caja ni inventario.
+
 ## Migraciones
 
 La sincronización automática del esquema está desactivada. Las tablas se añadirán mediante migraciones conforme se implementen los módulos del negocio.
