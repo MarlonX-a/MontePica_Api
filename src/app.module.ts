@@ -9,6 +9,8 @@ import { AuthModule } from './auth/auth.module.js';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AdminModule } from './admin/admin.module.js';
 import { OperationsModule } from './operations/operations.module.js';
+import { InventoryModule } from './inventory/inventory.module.js';
+import { TablesModule } from './tables/tables.module.js';
 
 @Module({
   imports: [
@@ -39,6 +41,8 @@ import { OperationsModule } from './operations/operations.module.js';
     AuthModule,
     AdminModule,
     OperationsModule,
+    InventoryModule,
+    TablesModule,
   ],
 })
 export class AppModule {}

@@ -5,8 +5,8 @@ export class Client {
   @PrimaryGeneratedColumn('uuid', { name: 'id_cliente' })
   id: string;
 
-  @Column({ name: 'id_usuario', type: 'uuid', unique: true })
-  userId: string;
+  @Column({ name: 'id_usuario', type: 'uuid', unique: true, nullable: true })
+  userId: string | null;
 
   @Column({ name: 'nombre_contacto', type: 'varchar', length: 160, nullable: true })
   contactName: string | null;

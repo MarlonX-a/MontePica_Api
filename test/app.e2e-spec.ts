@@ -135,6 +135,13 @@ describe('API foundation (e2e)', () => {
     expect(response.body.paths).toHaveProperty('/api/v1/admin/users');
     expect(response.body.paths).toHaveProperty('/api/v1/admin/categories');
     expect(response.body.paths).toHaveProperty('/api/v1/admin/products/{id}/visibility');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/initialize');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/movements');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/{productId}');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/{productId}/movements');
+    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/{productId}/adjustments');
     expect(response.body.paths).toHaveProperty('/api/v1/auth/change-password');
     expect(response.body.components.schemas.CreateAdminUserDto.properties).toHaveProperty('initialPassword');
     expect(response.body.components.schemas.VisibilityDto.properties).toEqual({
@@ -174,6 +181,11 @@ describe('API foundation (e2e)', () => {
 
     await request(app.getHttpServer()).get('/api/v1/auth/me').expect(401);
     await request(app.getHttpServer()).get('/api/v1/admin/products').expect(401);
+    await request(app.getHttpServer()).get('/api/v1/admin/operating-days').expect(401);
+    await request(app.getHttpServer())
+      .post('/api/v1/admin/operating-days/22222222-2222-4222-8222-222222222222/inventory/initialize')
+      .send({ items: [] })
+      .expect(401);
   });
 
   it('accepts only public customer registration fields and documents token response', async () => {

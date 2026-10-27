@@ -144,6 +144,52 @@ Después de aplicar las migraciones, las cuentas con permisos pueden usar:
 
 El administrador recibe `operations.read`, `operations.manage` y `operations.open`. El trabajador puede consultar el estado y abrir jornada/caja. Clientes no tienen estos permisos. Las aperturas y cambios de configuración quedan auditados dentro de la transacción correspondiente. Esta etapa no incluye movimientos de efectivo, cierre de caja ni inventario.
 
+## Etapa 4B: inventario diario
+
+Aplica las migraciones pendientes con `npm run migration:run`. El inventario se controla por jornada y producto. Cada producto con `tracksInventory: true` se inicializa explícitamente; una existencia no inicializada se devuelve con las cantidades en `null`, mientras que `0` indica un conteo inicial de cero. No se copian cantidades de otra jornada.
+
+Las rutas requieren JWT y los permisos indicados. El trabajador puede consultar y registrar movimientos ordinarios; solo el administrador puede inicializar productos o corregir saldos por conteo físico.
+
+| Endpoint | Permiso | Uso |
+|---|---|---|
+| `GET /api/v1/admin/operating-days?page=1&limit=20&status=open&fromDate=2026-10-01&toDate=2026-10-31` | `inventory.read` | Listar jornadas, de la más reciente a la más antigua. |
+| `GET /api/v1/admin/operating-days/:dayId/inventory?search=ceviche&categoryId=<uuid>&initialized=false` | `inventory.read` | Listar existencias y productos pendientes. |
+| `GET /api/v1/admin/operating-days/:dayId/inventory/:productId` | `inventory.read` | Consultar un producto en la jornada. |
+| `GET /api/v1/admin/operating-days/:dayId/inventory/movements?productId=<uuid>&type=waste` | `inventory.read` | Consultar movimientos de la jornada. |
+| `POST /api/v1/admin/operating-days/:dayId/inventory/initialize` | `inventory.initialize` | Inicializar productos por lote. |
+| `POST /api/v1/admin/operating-days/:dayId/inventory/:productId/movements` | `inventory.move` | Registrar reposición, consumo interno, obsequio o desperdicio. |
+| `POST /api/v1/admin/operating-days/:dayId/inventory/:productId/adjustments` | `inventory.adjust` | Ajustar con un conteo físico. |
+
+Todas las listas usan `{ items, total, page, limit }`; `page` inicia en 1 y `limit` por defecto es 20, máximo 100. En cada fila se devuelven `initialQuantity`, `physicalQuantity`, `reservedQuantity` y `availableQuantity`. Las unidades reservadas empiezan en cero y no cambian hasta que se implemente la reserva por pedidos.
+
+Ejemplos de escritura (todos requieren la cabecera `Idempotency-Key` con una clave única para la operación):
+
+```http
+POST /api/v1/admin/operating-days/<dayId>/inventory/initialize
+Idempotency-Key: initialize-2026-10-27
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+```
+
+```json
+{
+  "items": [
+    { "productId": "<productUuid>", "initialQuantity": 20 },
+    { "productId": "<anotherProductUuid>", "initialQuantity": 0 }
+  ]
+}
+```
+
+```json
+{ "type": "waste", "quantity": 2, "reason": "Porciones descartadas por deterioro" }
+```
+
+```json
+{ "countedQuantity": 15, "reason": "Corrección después del conteo físico" }
+```
+
+Las escrituras solo se aceptan en la jornada abierta correspondiente a la fecha actual de la zona horaria operativa. Las existencias no pueden quedar por debajo de las unidades reservadas. La clave idempotente conserva la respuesta original para solicitudes repetidas del mismo usuario, ruta y contenido; usarla con un contenido distinto responde `409`. Movimiento, saldo, auditoría e idempotencia se guardan en una transacción. Los movimientos no se pueden editar ni eliminar.
+
 ## Migraciones
 
 La sincronización automática del esquema está desactivada. Las tablas se añadirán mediante migraciones conforme se implementen los módulos del negocio.
