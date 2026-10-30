@@ -41,7 +41,7 @@ describe('Client access guards', () => {
     canActivate.mockImplementation(() => { request.authContext = { userId: 'user', sessionId: 'session' }; return true; });
     query.mockResolvedValue([{ clientId: 'client-from-db', roleCode: 'client' }]);
     await guard.canActivate(context);
-    expect(request.clientIdentity).toEqual({ clientId: 'client-from-db', userId: 'user' });
+    expect(request.clientIdentity).toEqual({ clientId: 'client-from-db', userId: 'user', userSessionId: 'session' });
   });
 
   it('does not bypass an invalid JWT', async () => {

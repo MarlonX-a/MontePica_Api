@@ -1,18 +1,21 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { hashAccessSecret } from './guest-sessions.service.js';
 import { auditTableOperation } from './table-audit.js';
 import { lockActiveVisit, lockTableOperations } from './table-operations.js';
+import type { UpdateTableDto } from './dto/participation.dto.js';
 
 @Injectable()
 export class TablesService {
   constructor(private readonly db: DataSource) {}
 
   async createTable(code: string, actor: string) {
+    const normalizedCode = code.trim().toUpperCase();
+    if (normalizedCode.length > 40) throw new BadRequestException('El código normalizado no puede exceder 40 caracteres.');
     try {
       return await this.db.transaction(async manager => {
-        const [table] = await manager.query(`INSERT INTO "mesa" ("codigo") VALUES ($1) RETURNING "id_mesa" AS id,"codigo" AS code,"activa" AS active`, [code.trim().toUpperCase()]);
+        const [table] = await manager.query(`INSERT INTO "mesa" ("codigo") VALUES ($1) RETURNING "id_mesa" AS id,"codigo" AS code,"activa" AS active`, [normalizedCode]);
         await auditTableOperation(manager, { userId: actor }, 'mesa', table.id, 'table.created', table);
         return table;
       });
@@ -28,6 +31,35 @@ export class TablesService {
       ORDER BY m."codigo",m."id_mesa" LIMIT $1 OFFSET $2`, [limit, (page - 1) * limit]);
     const [{ total }] = await this.db.query('SELECT count(*)::int AS total FROM "mesa"');
     return { items, total, page, limit };
+  }
+
+  async table(id: string) {
+    const [table] = await this.db.query(`SELECT m."id_mesa" AS id,m."codigo" AS code,m."activa" AS active,
+      v."id_visita" AS "openVisitId" FROM "mesa" m LEFT JOIN "visita_mesa" v ON v."id_mesa"=m."id_mesa" AND v."estado"='open' WHERE m."id_mesa"=$1`, [id]);
+    if (!table) throw new NotFoundException('Mesa no encontrada.');
+    return table;
+  }
+
+  async updateTable(id: string, dto: UpdateTableDto, actor: string) {
+    if (dto.code === undefined && dto.active === undefined) throw new BadRequestException('Envía al menos un campo.');
+    if (dto.code !== undefined && dto.code.toUpperCase().length > 40) throw new BadRequestException('El código normalizado no puede exceder 40 caracteres.');
+    try {
+      return await this.db.transaction(async m => {
+        await lockTableOperations(m);
+        const [before] = await m.query(`SELECT "id_mesa" AS id,"codigo" AS code,"activa" AS active FROM "mesa" WHERE "id_mesa"=$1 FOR UPDATE`, [id]);
+        if (!before) throw new NotFoundException('Mesa no encontrada.');
+        if (dto.active === false) {
+          const visits = await m.query(`SELECT 1 FROM "visita_mesa" WHERE "id_mesa"=$1 AND "estado"='open'`, [id]);
+          if (visits.length) throw new ConflictException('No se puede desactivar una mesa con visita abierta.');
+        }
+        const [[after]] = await m.query(`UPDATE "mesa" SET "codigo"=$2,"activa"=$3 WHERE "id_mesa"=$1 RETURNING "id_mesa" AS id,"codigo" AS code,"activa" AS active`, [id, dto.code?.toUpperCase() ?? before.code, dto.active ?? before.active]);
+        await auditTableOperation(m, { userId: actor }, 'mesa', id, 'table.updated', { before, after });
+        return after;
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') throw new ConflictException('El código ya existe.');
+      throw error;
+    }
   }
 
   async openVisit(tableId: string, actor: string) {

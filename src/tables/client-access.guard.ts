@@ -5,7 +5,7 @@ import { AuthAccessGuard } from '../auth/auth-access.guard.js';
 import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { GuestSessionsService, type GuestIdentity } from './guest-sessions.service.js';
 
-export interface ClientIdentity { clientId: string; guestSessionId?: string; userId?: string }
+export interface ClientIdentity { clientId: string; guestSessionId?: string; userId?: string; userSessionId?: string }
 type ClientRequest = Request & { clientIdentity?: ClientIdentity; authContext?: AuthenticatedRequestContext };
 
 function bearer(request: Request) {
@@ -42,7 +42,7 @@ export class ClientAccessGuard implements CanActivate {
       WHERE u."id_usuario"=$1 AND u."activo"=true`, [userId]);
     if (!client) throw new UnauthorizedException('Sesión no válida.');
     if (client.roleCode !== 'client' || !client.clientId) throw new ForbiddenException('Esta ruta requiere identidad de cliente.');
-    request.clientIdentity = { clientId: client.clientId, userId };
+    request.clientIdentity = { clientId: client.clientId, userId, userSessionId: request.authContext!.sessionId };
     return true;
   }
 }
@@ -51,4 +51,10 @@ export const CurrentGuest = createParamDecorator((_data: unknown, context: Execu
   const identity = context.switchToHttp().getRequest<ClientRequest>().clientIdentity;
   if (!identity?.guestSessionId) throw new UnauthorizedException('Sesión invitada no válida.');
   return { clientId: identity.clientId, guestSessionId: identity.guestSessionId };
+});
+
+export const CurrentClient = createParamDecorator((_data: unknown, context: ExecutionContext): ClientIdentity => {
+  const identity = context.switchToHttp().getRequest<ClientRequest>().clientIdentity;
+  if (!identity) throw new UnauthorizedException('Sesión no válida.');
+  return identity;
 });

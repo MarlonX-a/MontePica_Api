@@ -259,11 +259,138 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     await expect(guests.authenticate(guest.token)).resolves.toEqual(identity);
   });
 
+  it('requests, approves and closes accounts with idempotency and ownership checks', async () => {
+    const { table, visit, qr } = await fixture();
+    const guest = await guests.create({ name: 'Participant' });
+    const other = await guests.create({ name: 'Other' });
+    const route = `/api/v1/visits/${visit.id}/participants`;
+    const body = { qrToken: qr.qrToken, alias: '  Invitado  ' };
+    await request(http()).post(route).set('Authorization', auth(guest.token)).send(body).expect(400);
+    const requested = await request(http()).post(route).set('Authorization', auth(guest.token)).set('Idempotency-Key', 'request-1').send(body).expect(201);
+    expect(requested.body.status).toBe('pending'); expect(requested.body.alias).toBe('Invitado'); expect(requested.body.account).toBeNull();
+    const replay = await request(http()).post(route).set('Authorization', auth(guest.token)).set('Idempotency-Key', 'request-1').send(body).expect(201);
+    expect(replay.body).toEqual(requested.body);
+    await request(http()).post(route).set('Authorization', auth(guest.token)).set('Idempotency-Key', 'request-1').send({ ...body, alias: 'Changed' }).expect(409);
+    await request(http()).post(route).set('Authorization', auth(guest.token)).set('Idempotency-Key', 'request-2').send(body).expect(409);
+    const p = requested.body.id;
+    await request(http()).get(`/api/v1/me/participants/${p}`).set('Authorization', auth(other.token)).expect(404);
+    await request(http()).post(`/api/v1/me/participants/${p}/leave`).set('Authorization', auth(other.token)).set('Idempotency-Key','leave-other').expect(404);
+    await request(http()).post(`/api/v1/admin/participants/${p}/approve`).set('Authorization', auth(tokens.client)).set('Idempotency-Key', 'approve').expect(403);
+    await request(http()).post(`/api/v1/admin/participants/${p}/approve`).set('Authorization', auth(tokens.worker)).set('Idempotency-Key', 'approve').send({clientId:randomUUID()}).expect(400);
+    const approved = await request(http()).post(`/api/v1/admin/participants/${p}/approve`).set('Authorization', auth(tokens.worker)).set('Idempotency-Key', 'approve').expect(200);
+    expect(approved.body.status).toBe('approved'); expect(approved.body.account.status).toBe('open');
+    const again = await request(http()).post(`/api/v1/admin/participants/${p}/approve`).set('Authorization', auth(tokens.worker)).set('Idempotency-Key', 'approve').expect(200);
+    expect(again.body).toEqual(approved.body);
+    const own = await request(http()).get('/api/v1/me/participants?status=approved').set('Authorization', auth(guest.token)).expect(200);
+    expect(own.body.items).toHaveLength(1); expect(own.body.items[0].account.id).toBe(approved.body.account.id);
+    const visits = await request(http()).get(`/api/v1/admin/visits?tableId=${table.id}`).set('Authorization', auth(tokens.worker)).expect(200);
+    expect(visits.body.total).toBe(1);
+    await request(http()).get(`/api/v1/admin/visits/${visit.id}/participants`).set('Authorization', auth(tokens.worker)).expect(200);
+    await request(http()).patch(`/api/v1/admin/tables/${table.id}`).set('Authorization', auth(tokens.admin)).send({active:false}).expect(409);
+    await request(http()).get(`/api/v1/admin/tables/${table.id}`).set('Authorization', auth(tokens.worker)).expect(200);
+    const left = await request(http()).post(`/api/v1/me/participants/${p}/leave`).set('Authorization', auth(guest.token)).set('Idempotency-Key','leave-1').expect(200);
+    expect(left.body.status).toBe('finished'); expect(left.body.account.status).toBe('closed');
+    await request(http()).post(`/api/v1/me/participants/${p}/leave`).set('Authorization', auth(guest.token)).set('Idempotency-Key','leave-2').expect(409);
+    const closed = await request(http()).post(`/api/v1/admin/visits/${visit.id}/close`).set('Authorization', auth(tokens.worker)).set('Idempotency-Key','close').expect(200);
+    expect(closed.body.status).toBe('closed');
+    await request(http()).post(`/api/v1/admin/visits/${visit.id}/close`).set('Authorization', auth(tokens.worker)).set('Idempotency-Key','close').expect(200);
+    await request(http()).patch(`/api/v1/admin/tables/${table.id}`).set('Authorization', auth(tokens.admin)).send({active:false}).expect(200);
+    const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM cuenta_consumo WHERE id_participante=$1`, [p]); expect(n).toBe(1);
+    const audits = await db.query('SELECT detalle FROM auditoria WHERE recurso_id=$1', [p]);
+    expect(JSON.stringify(audits)).not.toContain(qr.qrToken);
+  });
+
+  it('permits registered customers and prevents concurrent approvals at multiple tables', async () => {
+    const a = await fixture(); const b = await fixture();
+    async function ask(f: typeof a, key: string) {
+      return request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization', auth(tokens.client)).set('Idempotency-Key', key).send({qrToken:f.qr.qrToken,alias:'Cliente'}).expect(201);
+    }
+    const [p1,p2] = await Promise.all([ask(a,'ask-a'),ask(b,'ask-b')]);
+    const approvals = await Promise.all([p1,p2].map((p,i) => request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key',`approve-${i}`)));
+    expect(approvals.map(r=>r.status).sort()).toEqual([200,409]);
+    for (const f of [a,b]) await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key',`close-${f.visit.id}`).expect(200);
+  });
+
+  it('rolls back approval and account creation if audit fails', async () => {
+    const f = await fixture(); const guest = await guests.create({name:'Rollback participant'});
+    const p = await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','rollback-ask').send({qrToken:f.qr.qrToken,alias:'Guest'}).expect(201);
+    await failAudit('participant.approve');
+    try { await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','rollback-approve').expect(500); }
+    finally { await restoreAudit(); }
+    const [row] = await db.query('SELECT estado FROM participante WHERE id_participante=$1',[p.body.id]); expect(row.estado).toBe('pending');
+    const [{ n }] = await db.query('SELECT count(*)::int AS n FROM cuenta_consumo WHERE id_participante=$1',[p.body.id]); expect(n).toBe(0);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','rollback-approve').expect(200);
+    await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','rollback-close').expect(200);
+  });
+
+  it('rejects expired guests, rotated QR, invalid input and terminal transitions', async () => {
+    const f = await fixture(); const guest = await guests.create({name:'Expired participant'});
+    const path = `/api/v1/visits/${f.visit.id}/participants`;
+    await request(http()).post(path).set('Authorization',auth(guest.token)).set('Idempotency-Key','invalid').send({qrToken:f.qr.qrToken,alias:' ',clientId:randomUUID()}).expect(400);
+    const p = await request(http()).post(path).set('Authorization',auth(guest.token)).set('Idempotency-Key','expiry-ask').send({qrToken:f.qr.qrToken,alias:'Guest'}).expect(201);
+    await db.query(`UPDATE sesion_cliente SET creada_en=now()-interval '2 days',expira_en=now()-interval '1 day' WHERE id_sesion_cliente=$1`, [guest.sessionId]);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','expired-approve').expect(409);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','reject').send({reason:' '}).expect(400);
+    const rejected = await request(http()).post(`/api/v1/admin/participants/${p.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','reject').send({reason:' no disponible '}).expect(200);
+    expect(rejected.body.status).toBe('rejected'); expect(rejected.body.rejectionReason).toBe('no disponible');
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/finish`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','finish-rejected').expect(409);
+    const fresh = await guests.create({name:'QR rotation'});
+    const pending = await request(http()).post(path).set('Authorization',auth(fresh.token)).set('Idempotency-Key','rotate-ask').send({qrToken:f.qr.qrToken,alias:'Guest'}).expect(201);
+    await tables.issueQr(f.visit.id, users.admin);
+    await request(http()).post(`/api/v1/admin/participants/${pending.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','rotated-approve').expect(409);
+    const [cancelled] = await db.query('SELECT estado FROM participante WHERE id_participante=$1',[pending.body.id]); expect(cancelled.estado).toBe('cancelled');
+    await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','expiry-close').expect(200);
+  });
+
+  it('serializes approval against QR rotation and visit closure', async () => {
+    for (const competingAction of ['qr','close']) {
+      const f = await fixture(); const guest = await guests.create({name:'Concurrent'});
+      const p = await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','ask').send({qrToken:f.qr.qrToken,alias:'Guest'}).expect(201);
+      const approvals = request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','approve-race');
+      const competing = request(http()).post(`/api/v1/admin/visits/${f.visit.id}/${competingAction}`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','close-race');
+      const [approval, operation] = await Promise.all([approvals, competing]);
+      expect([200,409]).toContain(approval.status); expect(competingAction === 'qr' ? 201 : 200).toBe(operation.status);
+      const [row] = await db.query(`SELECT p.estado,c.estado AS account_status FROM participante p LEFT JOIN cuenta_consumo c ON c.id_participante=p.id_participante WHERE p.id_participante=$1`,[p.body.id]);
+      if (competingAction === 'close') {
+        expect(['cancelled','finished']).toContain(row.estado);
+        if (row.account_status) expect(row.account_status).toBe('closed');
+      } else {
+        expect(['cancelled','approved']).toContain(row.estado);
+        await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','after-rotation').expect(200);
+      }
+    }
+  });
+
+  it('finishes and closes visits from previous operating dates', async () => {
+    const f = await fixture(); const guest = await guests.create({name:'Previous date'});
+    const p = await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','historical-ask').send({qrToken:f.qr.qrToken,alias:'Guest'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','historical-approve').expect(200);
+    await db.query('UPDATE jornada_operativa SET fecha_operativa=fecha_operativa-1 WHERE id_jornada=$1',[dayId]);
+    try {
+      const finish = await request(http()).post(`/api/v1/admin/participants/${p.body.id}/finish`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','historical-finish').expect(200);
+      expect(finish.body.status).toBe('finished'); expect(finish.body.account.status).toBe('closed');
+      await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','historical-close').expect(200);
+    } finally { await db.query(`UPDATE jornada_operativa SET fecha_operativa=timezone('America/Guayaquil',clock_timestamp())::date WHERE id_jornada=$1`,[dayId]); }
+  });
+
+  it('deduplicates simultaneous requests and revalidates revoked guest sessions before replay', async () => {
+    const f = await fixture(); const guest = await guests.create({name:'Concurrent request'});
+    const path = `/api/v1/visits/${f.visit.id}/participants`;
+    const submit = () => request(http()).post(path).set('Authorization',auth(guest.token)).set('Idempotency-Key','same-key').send({qrToken:f.qr.qrToken,alias:'Guest'});
+    const [first, second] = await Promise.all([submit(),submit()]);
+    expect(first.status).toBe(201); expect(second.status).toBe(201); expect(first.body).toEqual(second.body);
+    const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM participante WHERE id_visita=$1 AND id_cliente=$2`, [f.visit.id,guest.client.id]); expect(n).toBe(1);
+    await request(http()).delete('/api/v1/guest-sessions/current').set('Authorization',auth(guest.token)).expect(204);
+    expect((await submit()).status).toBe(401);
+    await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','close-pending').expect(200);
+    const [row] = await db.query(`SELECT estado FROM participante WHERE id_participante=$1`,[first.body.id]); expect(row.estado).toBe('cancelled');
+  });
+
   it('documents security schemes and limits guest creation requests', async () => {
     const docs = await request(http()).get('/docs-json').expect(200);
     expect(docs.body.paths['/api/v1/table-access/resolve'].post.security).toEqual([{ 'client-token': [] }]);
     expect(docs.body.paths['/api/v1/guest-sessions/current'].delete.security).toEqual([{ 'client-token': [] }]);
-    expect(docs.body.paths['/api/v1/visits/{id}/participants']).toBeUndefined();
+    expect(docs.body.paths['/api/v1/visits/{id}/participants'].post.security).toEqual([{ 'client-token': [] }]);
     let limited = 0;
     for (let i = 0; i < 11; i++) {
       const response = await request(http()).post('/api/v1/guest-sessions').send({ name: 'Rate test' });

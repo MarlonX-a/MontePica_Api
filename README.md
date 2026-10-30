@@ -192,7 +192,7 @@ Las escrituras solo se aceptan en la jornada abierta correspondiente a la fecha 
 
 ## Etapa 5A: sesiones invitadas y acceso seguro por QR
 
-Esta entrega permite identificar al cliente y resolver el QR de una visita. Las solicitudes, aprobaciones y cuentas de participantes se completarán en la Etapa 5B; todavía no tienen rutas disponibles.
+Esta entrega permite identificar al cliente y resolver el QR de una visita. La Etapa 5B añade las solicitudes, aprobaciones y cuentas de participantes descritas más adelante.
 
 Usa las migraciones existentes cuando vayas a habilitar esta etapa en tu entorno. No se ejecutan al arrancar y `synchronize` permanece desactivado. Las credenciales del `.env` deben apuntar a la base que quieras usar.
 
@@ -229,6 +229,32 @@ $env:RUN_POSTGRES_E2E = '1'
 npm run test:e2e
 Remove-Item Env:RUN_POSTGRES_E2E
 ```
+
+## Etapa 5B: participantes y cierre de visitas
+
+Un cliente registrado o invitado solicita acceso a una visita con su QR. El personal aprueba la solicitud y la API crea su cuenta individual local. El cliente consulta únicamente sus propias participaciones y su cuenta; el personal consulta los participantes de una visita.
+
+| Endpoint | Acceso | Uso |
+|---|---|---|
+| `POST /api/v1/visits/:id/participants` | Cliente o invitado | Solicitar ingreso con `{ "qrToken": "<token>", "alias": "María" }` |
+| `GET /api/v1/me/participants` y `GET /api/v1/me/participants/:id` | Cliente o invitado | Listar y consultar participaciones propias y su cuenta |
+| `POST /api/v1/me/participants/:id/leave` | Cliente o invitado | Cancelar solicitud pendiente o finalizar participación y cerrar la cuenta |
+| `GET /api/v1/admin/visits` y `GET /api/v1/admin/visits/:id` | `visits.read` | Consultar visitas actuales e históricas |
+| `GET /api/v1/admin/visits/:id/participants` | `participants.manage` | Consultar participantes de una visita |
+| `POST /api/v1/admin/participants/:id/approve` | `participants.manage` | Aprobar solicitud y crear cuenta |
+| `POST /api/v1/admin/participants/:id/reject` | `participants.manage` | Rechazar solicitud con `{ "reason": "Motivo" }` |
+| `POST /api/v1/admin/participants/:id/finish` | `participants.manage` | Finalizar participación aprobada y cerrar su cuenta |
+| `POST /api/v1/admin/visits/:id/close` | `visits.manage` | Cerrar visita, participantes y cuentas |
+| `GET /api/v1/admin/tables/:id` | `tables.read` | Consultar una mesa y su visita abierta |
+| `PATCH /api/v1/admin/tables/:id` | `tables.manage` | Actualizar `{ "code": "M01", "active": true }` |
+
+Las listas devuelven `{ items, total, page, limit }`, con página 1 y límite 20 por defecto, máximo 100. Visitas admite `tableId`, `operatingDayId` y `status`; participantes admite `status` (`pending`, `approved`, `rejected`, `cancelled`, `finished`). Las solicitudes, transiciones y cierre de visita requieren `Idempotency-Key` de 1 a 128 caracteres. Repetirla con los mismos datos devuelve la respuesta original; reutilizarla con otros datos devuelve `409`.
+
+Para probar desde Swagger, abre la jornada y visita y emite el QR como se indica en la Etapa 5A. Con el JWT de un cliente registrado o el token invitado en `client-token`, solicita ingreso con el QR y guarda el `id` de la participación. Con el JWT de administrador o trabajador en `access-token`, aprueba ese `id` y consulta la cuenta creada. De nuevo con `client-token`, consulta `/me/participants` y finaliza con `/leave`; el personal también puede finalizar o cerrar toda la visita.
+
+Crear y aprobar solicitudes exige mesa activa y jornada abierta de la fecha operativa actual. La sesión invitada que originó una solicitud debe seguir vigente al aprobarla. Renovar el QR cancela las solicitudes pendientes. Salida, finalización y cierre también se permiten en visitas de fechas anteriores. Los estados finales conservan su historial y no se reabren en la misma visita. El trabajador puede consultar y operar visitas y participantes; solo el administrador puede editar mesas.
+
+Las cuentas están vacías hasta implementar pedidos. La identidad del cliente procede del token, no de campos de la solicitud. Las operaciones, sus eventos de auditoría y sus respuestas idempotentes se guardan en una transacción; el QR no se guarda en texto en auditoría ni idempotencia. No se añade una migración en esta entrega: utiliza las tablas de la migración `1793600000000-CreateTableVisits`.
 
 ## Migraciones
 
