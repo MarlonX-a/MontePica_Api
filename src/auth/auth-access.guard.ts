@@ -18,7 +18,7 @@ export class AuthAccessGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
-    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    const token = authorization?.match(/^Bearer\s+(\S+)$/i)?.[1];
     if (!token) throw new UnauthorizedException('Sesión no válida.');
 
     let payload: { sub: string; sid: string; av: number };
@@ -52,7 +52,7 @@ export class AuthAccessGuard implements CanActivate {
     const user = await this.dataSource.getRepository(User).findOne({
       where: { id: payload.sub, active: true },
     });
-    if (!user || user.accessVersion !== payload.av) {
+    if (!user?.active || user.accessVersion !== payload.av) {
       throw new UnauthorizedException('Sesión no válida.');
     }
 

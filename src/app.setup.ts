@@ -25,6 +25,10 @@ export function configureApp(app: INestApplication): void {
       { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       'access-token',
     )
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', description: 'JWT de cliente registrado o token opaco guest_ de invitado.' },
+      'client-token',
+    )
     .build();
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('docs', app, document);

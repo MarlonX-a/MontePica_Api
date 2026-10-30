@@ -12,7 +12,7 @@ import type { ListInventoryMovementsQueryDto, ListInventoryQueryDto, ListOperati
 import type { CreateInventoryAdjustmentDto, CreateInventoryMovementDto } from './dto/inventory-movement.dto.js';
 
 const maxInteger = 2_147_483_647;
-const validMovementTypes = ['initialization', 'restock', 'internalConsumption', 'giveaway', 'waste', 'adjustment'];
+const validMovementTypes = new Set(['initialization', 'restock', 'internalConsumption', 'giveaway', 'waste', 'adjustment']);
 const pageArgs = (query: { page: number; limit: number }) => ({ page: query.page ?? 1, limit: query.limit ?? 20 });
 
 type InventoryItem = {
@@ -152,7 +152,7 @@ export class InventoryService {
       await this.lockCurrentOperatingDay(manager, dayId);
       const ids = normalizedItems.map((item) => item.productId);
       if (new Set(ids).size !== ids.length) throw new BadRequestException('No repitas productos en el lote.');
-      const sortedIds = [...ids].sort();
+      const sortedIds = [...ids].sort((a, b) => a.localeCompare(b, 'en'));
       const products = await manager.query(
         `SELECT p."id_producto" AS id, p."sku", p."nombre" AS name, c."id_categoria" AS "categoryId"
          FROM "producto" p JOIN "categoria" c ON c."id_categoria" = p."id_categoria"
@@ -288,7 +288,7 @@ export class InventoryService {
   }
 
   private validateMovementFilter(type?: string) {
-    if (type && !validMovementTypes.includes(type)) throw new BadRequestException('El tipo de movimiento no es válido.');
+    if (type && !validMovementTypes.has(type)) throw new BadRequestException('El tipo de movimiento no es válido.');
   }
 
   private async lockCurrentOperatingDay(manager: EntityManager, dayId: string) {

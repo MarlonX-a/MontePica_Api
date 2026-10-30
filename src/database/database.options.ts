@@ -9,6 +9,7 @@ import { Profile } from '../auth/entities/profile.entity.js';
 import { Role } from '../auth/entities/role.entity.js';
 import { User } from '../auth/entities/user.entity.js';
 import { UserSession } from '../auth/entities/user-session.entity.js';
+import { ParameterlessQueryLogger } from './parameterless-query.logger.js';
 
 const databaseDirectory = dirname(fileURLToPath(import.meta.url));
 
@@ -29,5 +30,6 @@ export function createDatabaseOptions(
     synchronize: false,
     migrationsRun: false,
     logging: env.DB_LOGGING,
+    logger: new ParameterlessQueryLogger(env.DB_LOGGING),
   };
 }

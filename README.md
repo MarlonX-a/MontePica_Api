@@ -190,6 +190,46 @@ Content-Type: application/json
 
 Las escrituras solo se aceptan en la jornada abierta correspondiente a la fecha actual de la zona horaria operativa. Las existencias no pueden quedar por debajo de las unidades reservadas. La clave idempotente conserva la respuesta original para solicitudes repetidas del mismo usuario, ruta y contenido; usarla con un contenido distinto responde `409`. Movimiento, saldo, auditoría e idempotencia se guardan en una transacción. Los movimientos no se pueden editar ni eliminar.
 
+## Etapa 5A: sesiones invitadas y acceso seguro por QR
+
+Esta entrega permite identificar al cliente y resolver el QR de una visita. Las solicitudes, aprobaciones y cuentas de participantes se completarán en la Etapa 5B; todavía no tienen rutas disponibles.
+
+Usa las migraciones existentes cuando vayas a habilitar esta etapa en tu entorno. No se ejecutan al arrancar y `synchronize` permanece desactivado. Las credenciales del `.env` deben apuntar a la base que quieras usar.
+
+| Endpoint | Identidad o permiso | Respuesta |
+|---|---|---|
+| `POST /api/v1/guest-sessions` | Público, máximo 10 solicitudes/minuto/IP | `201`, `{ client: { id, name, phone }, token, sessionId, expiresAt }` |
+| `DELETE /api/v1/guest-sessions/current` | Bearer `guest_` vigente | `204`; revoca la sesión invitada |
+| `GET /api/v1/admin/tables?page=1&limit=20` | JWT, `tables.read` | Lista paginada de mesas |
+| `POST /api/v1/admin/tables` | JWT, `tables.manage` | Crea mesa con `{ "code": "M01" }` |
+| `POST /api/v1/admin/tables/:id/visits` | JWT, `visits.manage` | `201`, `{ id, status, openedAt }`; invalida QR anterior |
+| `POST /api/v1/admin/visits/:id/qr` | JWT, `visits.manage` | `201`, `{ visitId, qrToken, qrVersion }` |
+| `POST /api/v1/table-access/resolve` | JWT de cliente o Bearer `guest_` | `200`, `{ visitId, tableId, tableCode, qrVersion }` |
+
+El trabajador puede listar mesas, abrir visitas y emitir QR. El administrador también puede crear mesas. El cliente registrado y el invitado resuelven el QR; el personal no puede usar esa ruta como cliente (`403`). Los invitados no pueden acceder a administración (`401`).
+
+Recorrido desde Swagger:
+
+1. Inicia sesión como administrador y configura `access-token` en **Authorize** con su JWT.
+2. Abre la jornada con `POST /api/v1/admin/operations/days/open`. Se usa la fecha actual en la zona horaria operativa; no se exige abrir caja.
+3. Crea una mesa, abre su visita y emite el QR mediante las rutas administrativas de la tabla anterior. Guarda `qrToken`: se entrega una sola vez.
+4. Crea un invitado con `POST /api/v1/guest-sessions` y `{ "name": "Invitado de prueba", "phone": "0987654321" }`. El teléfono es opcional. El nombre se recorta y admite de 1 a 160 caracteres; el teléfono, hasta 20. No se aceptan campos adicionales.
+5. Configura `client-token` en **Authorize** con el token `guest_` recibido. También puedes usar el JWT de un cliente registrado en este esquema.
+6. Envía `{ "qrToken": "<token-del-QR>" }` a `POST /api/v1/table-access/resolve` para consultar la visita y mesa.
+7. Revoca al invitado con `DELETE /api/v1/guest-sessions/current`. Las llamadas posteriores con ese token responderán `401`.
+
+Las sesiones invitadas duran 24 horas, sin renovación, y sus tokens se almacenan exclusivamente como hash. Las sesiones desconocidas, vencidas o revocadas responden `401`. Un QR desconocido, renovado o de una visita anterior responde `404`; una visita cuya mesa está inactiva o cuya jornada está cerrada o fuera de la fecha actual responde `409`. Los UUID, cuerpos y parámetros inválidos responden `400`. La emisión requiere las mismas condiciones operativas.
+
+Renovar el QR incrementa su versión y cancela las solicitudes pendientes, conservando los participantes aprobados. Apertura, emisión, cancelación de pendientes y auditoría se coordinan mediante transacciones y los bloqueos de operaciones existentes. Si falla la auditoría, se revierte la modificación. No se guardan tokens ni hashes en auditoría; el logger de consultas omite valores de parámetros incluso con `DB_LOGGING=true`.
+
+La suite PostgreSQL es opcional y crea una base temporal `mp_qr_test_<uuid>` usando el servidor y las credenciales de `.env` contra la base administrativa `postgres`. Requiere permiso `CREATEDB`, ejecuta y revierte migraciones solo en esa base temporal, prueba el flujo HTTP y elimina la base al finalizar. No utiliza `DB_NAME` para sus pruebas ni aplica migraciones a `MontePica`.
+
+```powershell
+$env:RUN_POSTGRES_E2E = '1'
+npm run test:e2e
+Remove-Item Env:RUN_POSTGRES_E2E
+```
+
 ## Migraciones
 
 La sincronización automática del esquema está desactivada. Las tablas se añadirán mediante migraciones conforme se implementen los módulos del negocio.

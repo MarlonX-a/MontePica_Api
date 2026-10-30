@@ -1,4 +1,5 @@
 import { INestApplication } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -189,13 +190,14 @@ describe('API foundation (e2e)', () => {
   });
 
   it('accepts only public customer registration fields and documents token response', async () => {
+    const testPassword = `Test1${randomBytes(12).toString('hex')}`;
     await request(app.getHttpServer())
       .post('/api/v1/auth/register')
       .send({
         name: 'María Zambrano',
         email: 'maria@example.com',
         phone: '0987654321',
-        password: 'MontePica123',
+        password: testPassword,
         termsAccepted: true,
       })
       .expect(201);
@@ -207,7 +209,7 @@ describe('API foundation (e2e)', () => {
         name: 'María Zambrano',
         email: 'maria@example.com',
         phone: '0987654321',
-        password: 'MontePica123',
+        password: testPassword,
         termsAccepted: true,
         role: 'admin',
       })
