@@ -9,6 +9,7 @@ type SettingsRow = {
   timeZone: string;
   openingTime: string;
   closingTime: string;
+  localOrderEditSeconds: number;
   updatedAt: Date;
 };
 
@@ -20,14 +21,14 @@ export class OperationsService {
     const rows = await this.dataSource.query(
       `SELECT "id_configuracion" AS id, "zona_horaria" AS "timeZone",
         to_char("hora_apertura", 'HH24:MI') AS "openingTime",
-        to_char("hora_cierre", 'HH24:MI') AS "closingTime", "actualizada_en" AS "updatedAt"
+        to_char("hora_cierre", 'HH24:MI') AS "closingTime", "edicion_local_seg" AS "localOrderEditSeconds", "actualizada_en" AS "updatedAt"
        FROM "configuracion_operativa" WHERE "id_configuracion" = 1`,
     );
     return rows[0] as SettingsRow;
   }
 
   async updateSettings(dto: UpdateOperationsSettingsDto, actor: AuthenticatedRequestContext) {
-    if (dto.timeZone === undefined && dto.openingTime === undefined && dto.closingTime === undefined) {
+    if (dto.timeZone === undefined && dto.openingTime === undefined && dto.closingTime === undefined && dto.localOrderEditSeconds === undefined) {
       throw new BadRequestException('Debes enviar al menos un campo para actualizar.');
     }
     if (dto.timeZone !== undefined && !this.isValidTimeZone(dto.timeZone)) {
@@ -42,12 +43,12 @@ export class OperationsService {
       const rows = await manager.query(
         `UPDATE "configuracion_operativa"
          SET "zona_horaria" = $1, "hora_apertura" = $2::time, "hora_cierre" = $3::time,
-             "actualizada_en" = now(), "actualizada_por" = $4
+             "actualizada_en" = now(), "actualizada_por" = $4, "edicion_local_seg" = $5
          WHERE "id_configuracion" = 1
          RETURNING "id_configuracion" AS id, "zona_horaria" AS "timeZone",
            to_char("hora_apertura", 'HH24:MI') AS "openingTime",
-           to_char("hora_cierre", 'HH24:MI') AS "closingTime", "actualizada_en" AS "updatedAt"`,
-        [timeZone, openingTime, closingTime, actor.userId],
+           to_char("hora_cierre", 'HH24:MI') AS "closingTime", "edicion_local_seg" AS "localOrderEditSeconds", "actualizada_en" AS "updatedAt"`,
+        [timeZone, openingTime, closingTime, actor.userId, dto.localOrderEditSeconds ?? before.localOrderEditSeconds],
       );
       await this.audit(manager, actor, 'operacion', null, 'operations.settings_updated', before, rows[0]);
       return rows[0] as SettingsRow;
@@ -133,7 +134,7 @@ export class OperationsService {
     const rows = await manager.query(
       `SELECT "id_configuracion" AS id, "zona_horaria" AS "timeZone",
         to_char("hora_apertura", 'HH24:MI') AS "openingTime",
-        to_char("hora_cierre", 'HH24:MI') AS "closingTime", "actualizada_en" AS "updatedAt"
+        to_char("hora_cierre", 'HH24:MI') AS "closingTime", "edicion_local_seg" AS "localOrderEditSeconds", "actualizada_en" AS "updatedAt"
        FROM "configuracion_operativa" WHERE "id_configuracion" = 1 FOR UPDATE`,
     );
     return rows[0] as SettingsRow;

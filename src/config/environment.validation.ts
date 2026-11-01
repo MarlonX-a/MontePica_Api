@@ -9,11 +9,19 @@ export interface ValidatedEnvironment {
   DB_LOGGING: boolean;
   CORS_ORIGINS: string[];
   JWT_ACCESS_SECRET: string;
+  TRANSFER_PAYMENTS_ENABLED: boolean;
+  S3_REGION: string;
+  S3_BUCKET: string;
+  S3_ACCESS_KEY_ID: string;
+  S3_SECRET_ACCESS_KEY: string;
+  S3_ENDPOINT: string;
+  S3_PREFIX: string;
+  S3_FORCE_PATH_STYLE: boolean;
 }
 
 export type ValidatedDatabaseEnvironment = Omit<
   ValidatedEnvironment,
-  'CORS_ORIGINS' | 'JWT_ACCESS_SECRET'
+  'CORS_ORIGINS' | 'JWT_ACCESS_SECRET' | 'TRANSFER_PAYMENTS_ENABLED' | 'S3_REGION' | 'S3_BUCKET' | 'S3_ACCESS_KEY_ID' | 'S3_SECRET_ACCESS_KEY' | 'S3_ENDPOINT' | 'S3_PREFIX' | 'S3_FORCE_PATH_STYLE'
 >;
 
 function requiredString(
@@ -113,9 +121,28 @@ export function validateEnvironment(
     throw new Error('Reemplaza JWT_ACCESS_SECRET con una clave aleatoria local.');
   }
 
+  const enabled = booleanValue(raw.TRANSFER_PAYMENTS_ENABLED, 'TRANSFER_PAYMENTS_ENABLED', false);
+  const readS3 = (name: string) => enabled ? requiredString(raw[name], name) : requiredString(raw[name], name, '');
+  const endpoint = requiredString(raw.S3_ENDPOINT, 'S3_ENDPOINT', '');
+  if (endpoint) {
+    let url: URL;
+    try { url = new URL(endpoint); } catch { throw new Error('S3_ENDPOINT debe ser una URL HTTP o HTTPS válida.'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('S3_ENDPOINT debe ser una URL HTTP o HTTPS sin credenciales.');
+  }
+  const prefix = requiredString(raw.S3_PREFIX, 'S3_PREFIX', 'montepica/receipts/');
+  if (prefix.startsWith('/') || !prefix.endsWith('/') || prefix.includes('..')) throw new Error('S3_PREFIX debe ser un prefijo relativo terminado en /.');
+
   return {
     ...database,
     CORS_ORIGINS: originsValue(raw.CORS_ORIGINS),
     JWT_ACCESS_SECRET: jwtAccessSecret,
+    TRANSFER_PAYMENTS_ENABLED: enabled,
+    S3_REGION: readS3('S3_REGION'),
+    S3_BUCKET: readS3('S3_BUCKET'),
+    S3_ACCESS_KEY_ID: readS3('S3_ACCESS_KEY_ID'),
+    S3_SECRET_ACCESS_KEY: readS3('S3_SECRET_ACCESS_KEY'),
+    S3_ENDPOINT: endpoint,
+    S3_PREFIX: prefix,
+    S3_FORCE_PATH_STYLE: booleanValue(raw.S3_FORCE_PATH_STYLE, 'S3_FORCE_PATH_STYLE', false),
   };
 }

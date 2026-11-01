@@ -16,7 +16,7 @@ const participantColumns = `p."id_participante" AS id,p."id_visita" AS "visitId"
 export class ParticipantsService {
   constructor(private readonly db: DataSource, private readonly idempotency: ParticipationIdempotencyService) {}
 
-  private async authenticate(manager: EntityManager, actor: ClientIdentity, participantId?: string) {
+  async authenticate(manager: EntityManager, actor: ClientIdentity, participantId?: string) {
     const rows = actor.guestSessionId
       ? await manager.query(`SELECT 1 FROM "sesion_cliente" WHERE "id_sesion_cliente"=$1 AND "id_cliente"=$2 AND "revocada_en" IS NULL AND "expira_en">clock_timestamp() FOR SHARE`, [actor.guestSessionId, actor.clientId])
       : await manager.query(`SELECT 1 FROM "cliente" c JOIN "usuario" u ON u."id_usuario"=c."id_usuario" JOIN "rol" r ON r."id_rol"=u."id_rol" JOIN "sesion_usuario" s ON s."id_usuario"=u."id_usuario" WHERE c."id_cliente"=$1 AND u."id_usuario"=$2 AND u."activo" AND r."codigo"='client' AND s."id_sesion_usuario"=$3 AND s."revocada_en" IS NULL AND s."expira_en">clock_timestamp() FOR SHARE OF u,s`, [actor.clientId, actor.userId, actor.userSessionId]);
@@ -106,6 +106,7 @@ export class ParticipantsService {
       } else {
         if (mode === 'reject' && p.estado !== 'pending' || mode === 'finish' && p.estado !== 'approved' || mode === 'leave' && !['pending','approved'].includes(p.estado)) throw new ConflictException('Transición de participación no permitida.');
         const next = mode === 'reject' ? 'rejected' : p.estado === 'pending' ? 'cancelled' : 'finished';
+        if (next === 'finished') await this.assertAccountsEmpty(m, 'p."id_participante"=$1', id);
         await m.query(`UPDATE "participante" SET "estado"=$2,"finalizada_en"=clock_timestamp(),"motivo_rechazo"=$3 WHERE "id_participante"=$1`, [id, next, reason ?? null]);
         if (next === 'finished') await m.query(`UPDATE "cuenta_consumo" SET "estado"='closed',"cerrada_en"=clock_timestamp() WHERE "id_participante"=$1 AND "estado"='open'`, [id]);
       }
@@ -129,6 +130,7 @@ export class ParticipantsService {
     return this.idempotency.run(actor, `visits/${id.toLowerCase()}/close`, key, {}, 200, 'visita_mesa', async () => {}, async m => {
       await lockTableOperations(m); const ref = await this.lockVisit(m, id);
       const participants = await m.query(`SELECT "id_participante" AS id,"estado" AS status FROM "participante" WHERE "id_visita"=$1 AND "estado" IN ('pending','approved') ORDER BY "id_cliente","id_participante" FOR UPDATE`, [id]);
+      await this.assertAccountsEmpty(m, 'p."id_visita"=$1', id);
       await m.query(`UPDATE "cuenta_consumo" SET "estado"='closed',"cerrada_en"=clock_timestamp() WHERE "id_participante" IN (SELECT "id_participante" FROM "participante" WHERE "id_visita"=$1 AND "estado"='approved') AND "estado"='open'`, [id]);
       await m.query(`UPDATE "participante" SET "estado"=CASE WHEN "estado"='pending' THEN 'cancelled' ELSE 'finished' END,"finalizada_en"=clock_timestamp() WHERE "id_visita"=$1 AND "estado" IN ('pending','approved')`, [id]);
       const [[visit]] = await m.query(`UPDATE "visita_mesa" SET "estado"='closed',"cerrada_en"=clock_timestamp(),"cerrada_por"=$2 WHERE "id_visita"=$1 RETURNING "id_visita" AS id,"estado" AS status,"cerrada_en" AS "closedAt"`, [id, actor.userId]);
@@ -136,5 +138,10 @@ export class ParticipantsService {
       await auditTableOperation(m, actor, 'visita_mesa', id, 'visit.closed', { participants });
       return { resourceId: id, response: visit };
     });
+  }
+
+  private async assertAccountsEmpty(m: EntityManager, filter: string, id: string) {
+    const [row] = await m.query(`SELECT 1 FROM participante p JOIN cuenta_consumo c ON c.id_participante=p.id_participante WHERE ${filter} AND (EXISTS (SELECT 1 FROM asignacion_consumo a WHERE a.id_cuenta=c.id_cuenta AND a.estado='active' AND NOT EXISTS (SELECT 1 FROM detalle_liquidacion dl JOIN liquidacion l ON l.id_liquidacion=dl.id_liquidacion WHERE dl.id_asignacion=a.id_asignacion AND dl.vigente AND l.estado='settled')) OR EXISTS (SELECT 1 FROM pedido o JOIN version_pedido v ON v.id_pedido=o.id_pedido JOIN detalle_pedido d ON d.id_version=v.id_version JOIN reserva_inventario r ON r.id_detalle=d.id_detalle WHERE o.id_cuenta=c.id_cuenta AND r.estado='active')) LIMIT 1`, [id]);
+    if (row) throw new ConflictException('La cuenta tiene consumos pendientes.');
   }
 }

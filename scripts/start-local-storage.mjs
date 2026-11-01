@@ -1,0 +1,13 @@
+import 'dotenv/config';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+
+const { S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY } = process.env;
+if (!S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) throw new Error('Completa las credenciales S3 locales en .env.');
+mkdirSync('.local/storage', { recursive: true });
+writeFileSync('.local/storage/s3.json', JSON.stringify({ identities: [{ name: 'montepica-local',
+  credentials: [{ accessKey: S3_ACCESS_KEY_ID, secretKey: S3_SECRET_ACCESS_KEY }],
+  actions: ['Admin', 'Read', 'List', 'Tagging', 'Write'] }] }), { mode: 0o600 });
+const result = spawnSync('docker', ['compose', '-f', 'compose.storage.yaml', 'up', '-d'], { stdio: 'inherit' });
+if (result.error) throw result.error;
+process.exitCode = result.status ?? 1;

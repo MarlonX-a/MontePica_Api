@@ -1,7 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength, MinLength, IsInt, Min, Max, ValidateIf } from 'class-validator';
 
 export class UpdateOperationsSettingsDto {
+  @ApiPropertyOptional({ minimum: 0, maximum: 3600, example: 300 })
+  @ValidateIf((_object, value) => value !== undefined) @IsInt() @Min(0) @Max(3600)
+  localOrderEditSeconds?: number;
   @ApiPropertyOptional({ example: 'America/Guayaquil', maxLength: 80 })
   @IsOptional()
   @IsString()

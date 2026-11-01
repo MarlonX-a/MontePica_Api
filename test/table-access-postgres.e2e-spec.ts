@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { parse } from 'dotenv';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { DataSource } from 'typeorm';
@@ -20,6 +20,13 @@ import { RequireProductCategory1793300000000 } from '../src/database/migrations/
 import { CreateOperationsOpening1793400000000 } from '../src/database/migrations/1793400000000-CreateOperationsOpening.js';
 import { CreateDailyInventory1793500000000 } from '../src/database/migrations/1793500000000-CreateDailyInventory.js';
 import { CreateTableVisits1793600000000 } from '../src/database/migrations/1793600000000-CreateTableVisits.js';
+import { CreateLocalOrders1793700000000 } from '../src/database/migrations/1793700000000-CreateLocalOrders.js';
+import { OrderLifecycle1793800000000 } from '../src/database/migrations/1793800000000-OrderLifecycle.js';
+import { CreateSettlements1793900000000 } from '../src/database/migrations/1793900000000-CreateSettlements.js';
+import { CreateCashPayments1794000000000 } from '../src/database/migrations/1794000000000-CreateCashPayments.js';
+import { CreateTransferReceipts1794100000000 } from '../src/database/migrations/1794100000000-CreateTransferReceipts.js';
+import { CreateDeliveryCoverage1794200000000 } from '../src/database/migrations/1794200000000-CreateDeliveryCoverage.js';
+import { ReceiptStorageService } from '../src/tables/receipt-storage.service.js';
 
 // Opt-in only: credentials from .env are used against postgres to CREATE a fresh, disposable database.
 // Never connects to DB_NAME from .env. Requires CREATEDB; no migrations are applied to MontePica.
@@ -36,6 +43,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
   let tables: TablesService;
   let access: TableAccessService;
   let counter = 0;
+  const receiptObjects = new Map<string,Buffer>();
+  let receiptUnavailable = false;
   const http = () => app.getHttpServer();
   const auth = (token: string) => `Bearer ${token}`;
 
@@ -50,7 +59,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     created = true;
     db = new DataSource({ ...options, migrations: [CreateCatalogTables1792080000000, CreateIdentityTables1792340000000,
       CreatePermissionsAndAudit1792600000000, AllowUncategorizedProducts1793200000000, RequireProductCategory1793300000000,
-      CreateOperationsOpening1793400000000, CreateDailyInventory1793500000000, CreateTableVisits1793600000000] });
+      CreateOperationsOpening1793400000000, CreateDailyInventory1793500000000, CreateTableVisits1793600000000, CreateLocalOrders1793700000000, OrderLifecycle1793800000000, CreateSettlements1793900000000, CreateCashPayments1794000000000, CreateTransferReceipts1794100000000, CreateDeliveryCoverage1794200000000] });
     await db.initialize();
     await db.runMigrations();
     // Empty-database up/down/up check; never revert a database containing user data.
@@ -58,7 +67,11 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     await db.runMigrations();
     for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
     const { AppModule } = await import('../src/app.module.js');
-    const module = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(DataSource).useValue(db).compile();
+    const module = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(DataSource).useValue(db).overrideProvider(ReceiptStorageService).useValue({
+      prefix:'test/receipts/', put:async (key:string,body:Buffer)=>{if (receiptUnavailable) throw new ServiceUnavailableException('Almacenamiento no disponible.'); receiptObjects.set(key,Buffer.from(body));},
+      get:async (key:string)=>{const body=receiptObjects.get(key); if (!body) throw new Error('missing'); return body;},
+      delete:async (key:string)=>{receiptObjects.delete(key);},
+    }).compile();
     app = module.createNestApplication({ logger: false });
     configureApp(app);
     await app.init();
@@ -108,6 +121,180 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     await db.query('DROP TRIGGER test_audit_failure ON auditoria');
     await db.query('DROP FUNCTION reject_test_audit()');
   }
+
+  it('creates an idempotent order, reserves stock and prevents closing an account with consumption', async () => {
+    const f = await fixture();
+    const guest = await guests.create({ name: 'Pedido' });
+    const other = await guests.create({ name: 'Otro' });
+    const p = await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization', auth(guest.token)).set('Idempotency-Key','order-participant').send({ qrToken:f.qr.qrToken, alias:'Pedido' }).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','order-approve').expect(200);
+    const [category] = await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Pedido test','pedido test') RETURNING id_categoria`);
+    const [product] = await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs) VALUES ($1,'pedido-test','Producto',650) RETURNING id_producto`, [category.id_categoria]);
+    await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,inicializado_por) VALUES ($1,$2,2,2,$3)`, [dayId,product.id_producto,users.admin]);
+    const url = `/api/v1/visits/${f.visit.id}/orders`;
+    const body = { items:[{productId:product.id_producto,quantity:2}] };
+    const submit = (key: string) => request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key',key).send(body);
+    await request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','duplicate').send({items:[...body.items,...body.items]}).expect(400);
+    await request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','invalid').send({items:[{productId:product.id_producto,quantity:0}]}).expect(400);
+    await db.query('UPDATE producto SET visible_menu=false WHERE id_producto=$1', [product.id_producto]);
+    await submit('hidden').expect(409);
+    await db.query('UPDATE producto SET visible_menu=true WHERE id_producto=$1', [product.id_producto]);
+    const order = await submit('order-1').expect(201);
+    expect(order.body.totalCents).toBe(1300);
+    expect((await submit('order-1').expect(201)).body).toEqual(order.body);
+    await submit('order-2').expect(409);
+    await request(http()).get(`/api/v1/me/orders/${order.body.id}`).set('Authorization',auth(other.token)).expect(404);
+    await request(http()).get(`/api/v1/admin/orders/${order.body.id}`).set('Authorization',auth(tokens.worker)).expect(200);
+    const list = await request(http()).get(`/api/v1/me/orders?visitId=${f.visit.id}&page=1&limit=1`).set('Authorization',auth(guest.token)).expect(200);
+    expect(list.body.total).toBe(1);
+    await request(http()).post(`/api/v1/me/participants/${p.body.id}/leave`).set('Authorization',auth(guest.token)).set('Idempotency-Key','order-leave').expect(409);
+    await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','order-close').expect(409);
+    const [stock] = await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1', [product.id_producto]);
+    expect(stock).toEqual({ cantidad_fisica:2, cantidad_reservada:2 });
+    await db.query('UPDATE producto SET precio_ctvs=999 WHERE id_producto=$1',[product.id_producto]);
+    await request(http()).put(`/api/v1/me/orders/${order.body.id}`).set('Authorization',auth(guest.token)).set('Idempotency-Key','too-many').send({expectedVersion:1,items:[{productId:product.id_producto,quantity:3}]}).expect(409);
+    const editBody = {expectedVersion:1,items:[{productId:product.id_producto,quantity:1}]};
+    const edit = () => request(http()).put(`/api/v1/me/orders/${order.body.id}`).set('Authorization',auth(guest.token)).set('Idempotency-Key','edit-order').send(editBody);
+    const edited = await edit().expect(200);
+    expect(edited.body.version).toBe(2);
+    expect(edited.body.totalCents).toBe(650);
+    expect((await edit().expect(200)).body).toEqual(edited.body);
+    await request(http()).put(`/api/v1/me/orders/${order.body.id}`).set('Authorization',auth(guest.token)).set('Idempotency-Key','stale-edit').send(editBody).expect(409);
+    const start = () => request(http()).post(`/api/v1/admin/orders/${order.body.id}/start-preparation`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','prepare-order').send({expectedVersion:2});
+    expect((await start().expect(200)).body.status).toBe('preparing');
+    await start().expect(200);
+    const [consumed] = await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);
+    expect(consumed).toEqual({cantidad_fisica:1,cantidad_reservada:0});
+    await request(http()).post(`/api/v1/admin/orders/${order.body.id}/ready`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','ready-order').send({expectedVersion:2}).expect(200);
+    await request(http()).post(`/api/v1/admin/orders/${order.body.id}/deliver`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','deliver-order').send({expectedVersion:2}).expect(200);
+    const history = await request(http()).get(`/api/v1/me/orders/${order.body.id}/history`).set('Authorization',auth(guest.token)).expect(200);
+    expect(history.body.versions).toHaveLength(2);
+    const accountId=order.body.accountId;
+    const ownAccount=await request(http()).get(`/api/v1/me/accounts/${accountId}`).set('Authorization',auth(guest.token)).expect(200);
+    expect(ownAccount.body.totalCents).toBe(650);
+    await request(http()).get(`/api/v1/me/accounts/${accountId}`).set('Authorization',auth(other.token)).expect(404);
+    const settlementUrl=`/api/v1/admin/accounts/${accountId}/settlements`;
+    const prepare=()=>request(http()).post(settlementUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-create').send({});
+    await prepare().expect(409);
+    await db.query(`INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES ($1,0,$2) ON CONFLICT (id_jornada) DO NOTHING`,[dayId,users.admin]);
+    await request(http()).post(settlementUrl).set('Authorization',auth(tokens.client)).set('Idempotency-Key','denied').send({}).expect(403);
+    const settlement=await prepare().expect(201);
+    expect(settlement.body.totalCents).toBe(650);
+    expect((await prepare().expect(201)).body).toEqual(settlement.body);
+    await request(http()).get(`/api/v1/me/settlements/${settlement.body.id}`).set('Authorization',auth(other.token)).expect(404);
+    await request(http()).get(`/api/v1/me/settlements/${settlement.body.id}`).set('Authorization',auth(guest.token)).expect(200);
+    await request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','pending-block').send({items:[{productId:product.id_producto,quantity:1}]}).expect(409);
+    const cancelSettlement=()=>request(http()).post(`/api/v1/admin/settlements/${settlement.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-cancel').send({reason:'Corregir'});
+    expect((await cancelSettlement().expect(200)).body.status).toBe('cancelled');
+    await cancelSettlement().expect(200);
+    const next=await request(http()).post(settlementUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-again').send({}).expect(201);
+    expect(next.body.items[0].unitPriceCents).toBe(650);
+    await request(http()).post(`/api/v1/admin/settlements/${next.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-cancel-again').send({reason:'Prueba'}).expect(200);
+    await failAudit('settlement.created');
+    try { await request(http()).post(settlementUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-audit-fail').send({}).expect(500); } finally { await restoreAudit(); }
+    const [pendingBefore]=await db.query(`SELECT count(*)::int AS n FROM liquidacion WHERE id_cuenta=$1 AND estado='pending'`,[accountId]);
+    expect(pendingBefore.n).toBe(0);
+    const concurrent=await Promise.all(['settle-race-1','settle-race-2'].map(key=>request(http()).post(settlementUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',key).send({})));
+    expect(concurrent.map(result=>result.status).sort()).toEqual([201,409]);
+    const activeSettlement=concurrent.find(result=>result.status===201)!.body.id;
+    await request(http()).post(`/api/v1/admin/settlements/${activeSettlement}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-cancel-race').send({reason:'Prueba'}).expect(200);
+    const [raceSettlement,raceOrder]=await Promise.all([
+      request(http()).post(settlementUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','settlement-vs-order').send({}),
+      request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','order-vs-settlement').send({items:[{productId:product.id_producto,quantity:1}]}),
+    ]);
+    expect([raceSettlement.status,raceOrder.status].sort()).toEqual([201,409]);
+  });
+
+  it('serializes orders for the last stock and rolls back when audit fails', async () => {
+    const f = await fixture();
+    const guest = await guests.create({ name: 'Concurrencia' });
+    const participant = await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','race-participant').send({qrToken:f.qr.qrToken,alias:'Concurrencia'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${participant.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','race-approve').expect(200);
+    const [category] = await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Concurrencia test','concurrencia test') RETURNING id_categoria`);
+    const [product] = await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs) VALUES ($1,'race-test','Producto',100) RETURNING id_producto`, [category.id_categoria]);
+    await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,inicializado_por) VALUES ($1,$2,1,1,$3)`, [dayId,product.id_producto,users.admin]);
+    const send = (key: string) => request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(guest.token)).set('Idempotency-Key',key).send({items:[{productId:product.id_producto,quantity:1}]});
+    await failAudit('order.submitted');
+    try { await send('audit-fail').expect(500); } finally { await restoreAudit(); }
+    const [before] = await db.query('SELECT cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);
+    expect(before.cantidad_reservada).toBe(0);
+    const results = await Promise.all([send('race-one'),send('race-two')]);
+    expect(results.map(result => result.status).sort()).toEqual([201,409]);
+    const [after] = await db.query('SELECT cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);
+    expect(after.cantidad_reservada).toBe(1);
+    const orderId = results.find(result => result.status===201)!.body.id;
+    const cancel = () => request(http()).post(`/api/v1/me/orders/${orderId}/cancel`).set('Authorization',auth(guest.token)).set('Idempotency-Key','cancel-order').send({expectedVersion:1,reason:'Cambio de planes'});
+    expect((await cancel().expect(200)).body.status).toBe('cancelled');
+    await cancel().expect(200);
+    const [released] = await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);
+    expect(released).toEqual({cantidad_fisica:1,cantidad_reservada:0});
+    await request(http()).post(`/api/v1/me/participants/${participant.body.id}/leave`).set('Authorization',auth(guest.token)).set('Idempotency-Key','leave-after-cancel').expect(200);
+  });
+
+  it('serializes cancellation against preparation', async () => {
+    const f=await fixture(); const guest=await guests.create({name:'Carrera'});
+    const p=await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','racer-participant').send({qrToken:f.qr.qrToken,alias:'Carrera'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','racer-approve').expect(200);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Carrera ciclo','carrera ciclo') RETURNING id_categoria`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs) VALUES ($1,'racer-life','Producto',100) RETURNING id_producto`,[category.id_categoria]);
+    await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,inicializado_por) VALUES ($1,$2,1,1,$3)`,[dayId,product.id_producto,users.admin]);
+    const order=await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(guest.token)).set('Idempotency-Key','racer-create').send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    const [cancel,prepare]=await Promise.all([
+      request(http()).post(`/api/v1/me/orders/${order.body.id}/cancel`).set('Authorization',auth(guest.token)).set('Idempotency-Key','racer-cancel').send({expectedVersion:1,reason:'Cambio'}),
+      request(http()).post(`/api/v1/admin/orders/${order.body.id}/start-preparation`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','racer-start').send({expectedVersion:1}),
+    ]);
+    expect([cancel.status,prepare.status].sort()).toEqual([200,409]);
+    const [stock]=await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);
+    expect(stock.cantidad_reservada).toBe(0); expect(stock.cantidad_fisica).toBe(cancel.status===200 ? 1 : 0);
+  });
+
+  it('configures coverage and reviews registered customer requests', async () => {
+    const initial=await request(http()).get('/api/v1/delivery/settings').expect(200); expect(initial.body.enabled).toBe(false);
+    const guest=await guests.create({name:'Invitado domicilio'});
+    const body={configurationVersion:1,recipientName:' Cliente ',phone:'123',address:' Calle 1 '};
+    await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(guest.token)).set('Idempotency-Key','guest-delivery').send(body).expect(401);
+    await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.worker)).set('Idempotency-Key','worker-delivery').send(body).expect(403);
+    await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.worker)).set('Idempotency-Key','denied-delivery-settings').send({enabled:true,coverageDescription:'Centro',shippingFeeCents:0}).expect(403);
+    const settingsBody={enabled:true,coverageDescription:' Centro ',shippingFeeCents:0};
+    const configure=()=>request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','delivery-settings').send(settingsBody);
+    const settings=await configure().expect(200); expect(settings.body.version).toBe(2); expect(settings.body.shippingFeeCents).toBe(0); expect((await configure().expect(200)).body).toEqual(settings.body);
+    const submit=(payload:unknown,key:string)=>request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key',key).send(payload);
+    await submit({...body,configurationVersion:2,latitude:1},'bad-coordinates').expect(400);
+    await submit({...body,configurationVersion:1},'old-settings').expect(409);
+    const created=await submit({...body,configurationVersion:2},'delivery-create').expect(201); expect(created.body.status).toBe('pending'); expect(created.body.address).toBe('Calle 1');
+    const [otherUser]=await db.query(`INSERT INTO usuario(id_rol,correo_normalizado,password_hash) SELECT id_rol,'delivery-other@test.invalid','test-unused-password-hash' FROM rol WHERE codigo='client' RETURNING id_usuario`);
+    await db.query('INSERT INTO cliente(id_usuario) VALUES ($1)',[otherUser.id_usuario]);
+    const [otherSession]=await db.query(`INSERT INTO sesion_usuario(id_usuario,refresh_hash,expira_en) VALUES ($1,$2,now()+interval '1 day') RETURNING id_sesion_usuario`,[otherUser.id_usuario,hashAccessSecret(randomUUID())]);
+    const otherToken=await app.get(JwtService).signAsync({sub:otherUser.id_usuario,sid:otherSession.id_sesion_usuario,av:0});
+    await request(http()).get(`/api/v1/me/delivery-requests/${created.body.id}`).set('Authorization',auth(otherToken)).expect(404);
+    expect((await submit({...body,configurationVersion:2},'delivery-create').expect(201)).body).toEqual(created.body);
+    await request(http()).get(`/api/v1/admin/delivery-requests?operatingDayId=${dayId}&status=pending&limit=1`).set('Authorization',auth(tokens.worker)).expect(200);
+    const approved=await request(http()).post(`/api/v1/admin/delivery-requests/${created.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-approve').send({}).expect(200);
+    expect(approved.body.usableToday).toBe(true);
+    await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','delivery-settings-change').send({enabled:true,coverageDescription:'Centro',shippingFeeCents:300}).expect(200);
+    const previous=await request(http()).get(`/api/v1/me/delivery-requests/${created.body.id}`).set('Authorization',auth(tokens.client)).expect(200);
+    expect(previous.body.usableToday).toBe(false); expect(previous.body.shippingFeeCents).toBe(0);
+    await request(http()).post(`/api/v1/me/delivery-requests/${created.body.id}/cancel`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','delivery-cancel').send({}).expect(200);
+    const pending=await submit({...body,configurationVersion:3,latitude:-0.5,longitude:-80.1},'delivery-race-create').expect(201);
+    await failAudit('delivery.approve');
+    try {await request(http()).post(`/api/v1/admin/delivery-requests/${pending.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-audit-fail').send({}).expect(500);} finally {await restoreAudit();}
+    const afterFailure=await request(http()).get(`/api/v1/me/delivery-requests/${pending.body.id}`).set('Authorization',auth(tokens.client)).expect(200); expect(afterFailure.body.status).toBe('pending');
+    const [approve,cancel]=await Promise.all([
+      request(http()).post(`/api/v1/admin/delivery-requests/${pending.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-race-approve').send({}),
+      request(http()).post(`/api/v1/me/delivery-requests/${pending.body.id}/cancel`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','delivery-race-cancel').send({}),
+    ]);
+    expect([approve.status,cancel.status].sort()).toEqual(approve.status===200?[200,200]:[200,409]);
+    const stale=await submit({...body,configurationVersion:3},'delivery-stale-create').expect(201);
+    await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','delivery-settings-stale').send({enabled:true,coverageDescription:'Nueva zona',shippingFeeCents:400}).expect(200);
+    await request(http()).post(`/api/v1/admin/delivery-requests/${stale.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-stale-approve').send({}).expect(409);
+    await request(http()).post(`/api/v1/admin/delivery-requests/${stale.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-stale-reject').send({reason:'Cobertura actualizada'}).expect(200);
+    const historic=await submit({...body,configurationVersion:4},'delivery-historic-create').expect(201);
+    await db.query('UPDATE jornada_operativa SET fecha_operativa=fecha_operativa-1 WHERE id_jornada=$1',[dayId]);
+    try {
+      await request(http()).post(`/api/v1/admin/delivery-requests/${historic.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-historic-approve').send({}).expect(409);
+      await request(http()).post(`/api/v1/admin/delivery-requests/${historic.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','delivery-historic-reject').send({reason:'Jornada anterior'}).expect(200);
+    } finally {await db.query(`UPDATE jornada_operativa SET fecha_operativa=timezone('America/Guayaquil',clock_timestamp())::date WHERE id_jornada=$1`,[dayId]);}
+  });
 
   it('creates a normalized guest, stores only its hash and audits without secrets', async () => {
     const res = await request(http()).post('/api/v1/guest-sessions').send({ name: '  Invitada  ', phone: ' 123 ' }).expect(201);
@@ -397,5 +584,151 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
       expect([201, 429]).toContain(response.status); if (response.status === 429) limited++;
     }
     expect(limited).toBeGreaterThan(0);
+  });
+  it('serializes cash collection against cancellation without duplicate income', async () => {
+    const f=await fixture(); const guest=await guests.create({name:'Carrera de pago'});
+    const p=await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','payment-race-participant').send({qrToken:f.qr.qrToken,alias:'Carrera'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','payment-race-approve').expect(200);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Carrera pago','carrera pago') RETURNING id_categoria`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'payment-race-product','Producto',500,false) RETURNING id_producto`,[category.id_categoria]);
+    const order=await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(guest.token)).set('Idempotency-Key','payment-race-order').send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    for (const action of ['start-preparation','ready','deliver']) await request(http()).post(`/api/v1/admin/orders/${order.body.id}/${action}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`payment-race-${action}`).send({expectedVersion:1}).expect(200);
+    const settlement=await request(http()).post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','payment-race-settlement').send({}).expect(201);
+    const [pay,cancel]=await Promise.all([
+      request(http()).post(`/api/v1/admin/settlements/${settlement.body.id}/cash-payments`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','payment-race-pay').send({receivedCents:500}),
+      request(http()).post(`/api/v1/admin/settlements/${settlement.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','payment-race-cancel').send({reason:'Error'}),
+    ]);
+    expect([pay.status,cancel.status].sort((a,b)=>a-b)).toEqual(cancel.status===200?[200,409]:[201,409]);
+    const [saved]=await db.query(`SELECT l.estado,(SELECT count(*)::int FROM pago WHERE id_liquidacion=l.id_liquidacion) AS payments FROM liquidacion l WHERE l.id_liquidacion=$1`,[settlement.body.id]);
+    expect(saved.estado).toBe(pay.status===201?'settled':'cancelled'); expect(saved.payments).toBe(pay.status===201?1:0);
+  });
+
+  it('registers, rejects and confirms private transfer receipts', async () => {
+    const f=await fixture(); const guest=await guests.create({name:'Transferencia'}); const other=await guests.create({name:'Otro'});
+    const p=await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','transfer-participant').send({qrToken:f.qr.qrToken,alias:'Transferencia'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-approve').expect(200);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Transfer test','transfer test') RETURNING id_categoria`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'transfer-product','Producto',500,false) RETURNING id_producto`,[category.id_categoria]);
+    const order=await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(guest.token)).set('Idempotency-Key','transfer-order').send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    for (const action of ['start-preparation','ready','deliver']) await request(http()).post(`/api/v1/admin/orders/${order.body.id}/${action}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`transfer-${action}`).send({expectedVersion:1}).expect(200);
+    const settlement=await request(http()).post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-settlement').send({}).expect(201);
+    const url=`/api/v1/me/settlements/${settlement.body.id}/transfer-payments`; const pdf=Buffer.from('%PDF-1.7\nexample');
+    const upload=(key:string)=>request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key',key).attach('file',pdf,{filename:'receipt.pdf',contentType:'application/pdf'});
+    await request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','bad-type').attach('file',Buffer.from('not a pdf'),{filename:'fake.pdf',contentType:'application/pdf'}).expect(415);
+    const beforeObjects=receiptObjects.size;
+    receiptUnavailable=true;
+    try {await upload('storage-unavailable').expect(503);} finally {receiptUnavailable=false;}
+    expect(receiptObjects.size).toBe(beforeObjects);
+    await failAudit('transfer.submitted');
+    try {await upload('failed-transfer').expect(500);} finally {await restoreAudit();}
+    expect(receiptObjects.size).toBe(beforeObjects);
+    const [failed]=await db.query(`SELECT count(*)::int AS count FROM pago WHERE id_liquidacion=$1`,[settlement.body.id]); expect(failed.count).toBe(0);
+    const first=await upload('transfer-upload').expect(201); expect((await upload('transfer-upload').expect(201)).body).toEqual(first.body);
+    await request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','transfer-upload').attach('file',Buffer.from('%PDF-1.7\ndifferent'),{filename:'receipt.pdf',contentType:'application/pdf'}).expect(409);
+    await request(http()).get(`/api/v1/me/payments/${first.body.id}/receipt`).set('Authorization',auth(other.token)).expect(404);
+    await request(http()).get(`/api/v1/me/payments/${first.body.id}/receipt`).set('Authorization',auth(guest.token)).expect(200);
+    await request(http()).post(`/api/v1/admin/settlements/${settlement.body.id}/cash-payments`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-block').send({receivedCents:500}).expect(409);
+    await request(http()).post(`/api/v1/admin/settlements/${settlement.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-cancel-block').send({reason:'Prueba'}).expect(409);
+    await request(http()).post(`/api/v1/admin/payments/${first.body.id}/confirm`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','forbidden-confirm').send({bankOperationReference:'XYZ'}).expect(403);
+    await request(http()).post(`/api/v1/admin/payments/${first.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-reject').send({reason:'No aparece'}).expect(200);
+    const second=await upload('transfer-upload-2').expect(201);
+    const confirm=()=>request(http()).post(`/api/v1/admin/payments/${second.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-confirm').send({bankOperationReference:'  abc-123  '});
+    const [confirmed,rejected]=await Promise.all([confirm(),request(http()).post(`/api/v1/admin/payments/${second.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-race-reject').send({reason:'Carrera'})]);
+    expect([confirmed.status,rejected.status].sort()).toEqual([200,409]);
+    if (confirmed.status===200) await confirm().expect(200);
+    else { const third=await upload('transfer-upload-3').expect(201); await request(http()).post(`/api/v1/admin/payments/${third.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-confirm-3').send({bankOperationReference:'abc-123'}).expect(200); }
+    const list=await request(http()).get('/api/v1/me/payments?method=transfer&status=confirmed').set('Authorization',auth(guest.token)).expect(200); expect(list.body.total).toBe(1);
+    const account=await request(http()).get(`/api/v1/me/accounts/${order.body.accountId}`).set('Authorization',auth(guest.token)).expect(200);
+    expect(account.body.paidCents).toBe(500); expect(account.body.pendingCents).toBe(0);
+    const f2=await fixture(); const guest2=await guests.create({name:'Referencia repetida'});
+    const p2=await request(http()).post(`/api/v1/visits/${f2.visit.id}/participants`).set('Authorization',auth(guest2.token)).set('Idempotency-Key','transfer-dup-participant').send({qrToken:f2.qr.qrToken,alias:'Otra'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p2.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-dup-approve').expect(200);
+    const o2=await request(http()).post(`/api/v1/visits/${f2.visit.id}/orders`).set('Authorization',auth(guest2.token)).set('Idempotency-Key','transfer-dup-order').send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    for (const action of ['start-preparation','ready','deliver']) await request(http()).post(`/api/v1/admin/orders/${o2.body.id}/${action}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`transfer-dup-${action}`).send({expectedVersion:1}).expect(200);
+    const s2=await request(http()).post(`/api/v1/admin/accounts/${o2.body.accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-dup-settlement').send({}).expect(201);
+    const t2=await request(http()).post(`/api/v1/admin/settlements/${s2.body.id}/transfer-payments`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-staff-upload').attach('file',pdf,{filename:'receipt.pdf',contentType:'application/pdf'}).expect(201);
+    await request(http()).post(`/api/v1/admin/payments/${t2.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-duplicate-reference').send({bankOperationReference:'abc-123'}).expect(409);
+    await request(http()).post(`/api/v1/admin/payments/${t2.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','transfer-unique-reference').send({bankOperationReference:'xyz-456'}).expect(200);
+  });
+
+  it('closes a zero-total settlement without inserting a payment', async () => {
+    const f=await fixture(); const guest=await guests.create({name:'Cortesía'});
+    const p=await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','zero-participant').send({qrToken:f.qr.qrToken,alias:'Cortesía'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','zero-approve').expect(200);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Gratis','gratis') RETURNING id_categoria`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'free-product','Cortesía',0,false) RETURNING id_producto`,[category.id_categoria]);
+    const order=await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(guest.token)).set('Idempotency-Key','zero-order').send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    for (const action of ['start-preparation','ready','deliver']) await request(http()).post(`/api/v1/admin/orders/${order.body.id}/${action}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`zero-${action}`).send({expectedVersion:1}).expect(200);
+    const settlement=await request(http()).post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','zero-settlement').send({}).expect(201);
+    const close=()=>request(http()).post(`/api/v1/admin/settlements/${settlement.body.id}/complete-without-payment`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','zero-close').send({});
+    expect((await close().expect(200)).body.payment).toBeNull(); await close().expect(200);
+    const [{count}]=await db.query('SELECT count(*)::int AS count FROM pago WHERE id_liquidacion=$1',[settlement.body.id]); expect(count).toBe(0);
+    await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','zero-close-visit').expect(200);
+  });
+
+  it('creates an order for a registered customer and preserves its price', async () => {
+    const f = await fixture();
+    const p = await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','registered-order-participant').send({qrToken:f.qr.qrToken,alias:'Cliente'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','registered-order-approve').expect(200);
+    const [category] = await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Cliente test','cliente test') RETURNING id_categoria`);
+    const [product] = await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'registered-order-test','Producto',250,false) RETURNING id_producto`, [category.id_categoria]);
+    const body = {items:[{productId:product.id_producto,quantity:2}]};
+    const order = await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','registered-order').send(body).expect(201);
+    await db.query('UPDATE producto SET precio_ctvs=500 WHERE id_producto=$1',[product.id_producto]);
+    const own = await request(http()).get(`/api/v1/me/orders/${order.body.id}`).set('Authorization',auth(tokens.client)).expect(200);
+    expect(own.body.totalCents).toBe(500);
+    expect(own.body.items[0].unitPriceCents).toBe(250);
+    await request(http()).get('/api/v1/admin/orders').set('Authorization',auth(tokens.client)).expect(403);
+    await request(http()).get('/api/v1/me/orders?limit=0').set('Authorization',auth(tokens.client)).expect(400);
+    const accountId=order.body.accountId;
+    const ownAccount=await request(http()).get(`/api/v1/me/accounts/${accountId}`).set('Authorization',auth(tokens.client)).expect(200);
+    expect(ownAccount.body.totalCents).toBe(500);
+    await request(http()).get('/api/v1/me/accounts?status=invalid').set('Authorization',auth(tokens.client)).expect(400);
+    await request(http()).post(`/api/v1/admin/accounts/${accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','unfinished-settlement').send({}).expect(409);
+    for (const action of ['start-preparation','ready','deliver']) await request(http()).post(`/api/v1/admin/orders/${order.body.id}/${action}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`registered-${action}`).send({expectedVersion:1}).expect(200);
+    const result=await request(http()).post(`/api/v1/admin/accounts/${accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','registered-settlement').send({}).expect(201);
+    const ownSettlement=await request(http()).get(`/api/v1/me/settlements/${result.body.id}`).set('Authorization',auth(tokens.client)).expect(200);
+    expect(ownSettlement.body.totalCents).toBe(500);
+    const accounts=await request(http()).get(`/api/v1/admin/accounts?status=open&operatingDayId=${dayId}&visitId=${f.visit.id}&page=1&limit=1`).set('Authorization',auth(tokens.worker)).expect(200);
+    expect(accounts.body.total).toBe(1); expect(accounts.body.items[0].id).toBe(accountId);
+    const settlements=await request(http()).get(`/api/v1/admin/settlements?status=pending&accountId=${accountId}&cashRegisterId=${result.body.cashRegisterId}&page=1&limit=1`).set('Authorization',auth(tokens.worker)).expect(200);
+    expect(settlements.body.total).toBe(1); expect(settlements.body.items[0].id).toBe(result.body.id);
+    await request(http()).get('/api/v1/admin/settlements?status=invalid').set('Authorization',auth(tokens.worker)).expect(400);
+    await request(http()).post(`/api/v1/admin/settlements/${result.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','historical-cancel').send({reason:'Prueba'}).expect(200);
+    const [previous]=await db.query(`INSERT INTO jornada_operativa(fecha_operativa,estado,abierta_por) SELECT fecha_operativa-7,'closed',$2 FROM jornada_operativa WHERE id_jornada=$1 RETURNING id_jornada`,[dayId,users.admin]);
+    await db.query('UPDATE cuenta_consumo SET id_jornada=$2 WHERE id_cuenta=$1',[accountId,previous.id_jornada]);
+    await db.query('UPDATE visita_mesa SET id_jornada=$2 WHERE id_visita=$1',[f.visit.id,previous.id_jornada]);
+    await db.query('UPDATE pedido SET id_jornada=$2 WHERE id_pedido=$1',[order.body.id,previous.id_jornada]);
+    const historical=await request(http()).post(`/api/v1/admin/accounts/${accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','historical-settlement').send({}).expect(201);
+    expect(historical.body.cashRegisterId).toBe(result.body.cashRegisterId);
+    const paymentUrl=`/api/v1/admin/settlements/${historical.body.id}/cash-payments`;
+    await request(http()).post(paymentUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','insufficient').send({receivedCents:499}).expect(409);
+    await request(http()).post(paymentUrl).set('Authorization',auth(tokens.client)).set('Idempotency-Key','denied-payment').send({receivedCents:700}).expect(403);
+    await failAudit('payment.confirmed');
+    try { await request(http()).post(paymentUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','failed-payment').send({receivedCents:700}).expect(500); } finally { await restoreAudit(); }
+    const [{paymentCount}]=await db.query('SELECT count(*)::int AS "paymentCount" FROM pago WHERE id_liquidacion=$1',[historical.body.id]); expect(paymentCount).toBe(0);
+    const collect=()=>request(http()).post(paymentUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','cash-payment').send({receivedCents:700});
+    const [payment,simultaneous]=await Promise.all([collect().expect(201),collect().expect(201)]);
+    expect(simultaneous.body).toEqual(payment.body);
+    expect(payment.body.payment.amountCents).toBe(500); expect(payment.body.payment.changeCents).toBe(200);
+    expect((await collect().expect(201)).body).toEqual(payment.body);
+    await request(http()).post(paymentUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','second-payment').send({receivedCents:700}).expect(409);
+    const paid=await request(http()).get(`/api/v1/me/accounts/${accountId}`).set('Authorization',auth(tokens.client)).expect(200);
+    expect(paid.body.paidCents).toBe(500); expect(paid.body.pendingCents).toBe(0); expect(paid.body.status).toBe('closed');
+    await request(http()).get(`/api/v1/me/payments/${payment.body.payment.id}`).set('Authorization',auth(tokens.client)).expect(200);
+    await request(http()).post(`/api/v1/admin/visits/${f.visit.id}/close`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','close-paid-visit').expect(200);
+  });
+
+  it('allows a registered customer to submit a private transfer receipt', async () => {
+    const f=await fixture();
+    const p=await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','registered-transfer-participant').send({qrToken:f.qr.qrToken,alias:'Cliente'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${p.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','registered-transfer-approve').expect(200);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Registrado transferencia','registrado transferencia') RETURNING id_categoria`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'registered-transfer-product','Producto',200,false) RETURNING id_producto`,[category.id_categoria]);
+    const order=await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','registered-transfer-order').send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    for (const action of ['start-preparation','ready','deliver']) await request(http()).post(`/api/v1/admin/orders/${order.body.id}/${action}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`registered-transfer-${action}`).send({expectedVersion:1}).expect(200);
+    const settlement=await request(http()).post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','registered-transfer-settlement').send({}).expect(201);
+    const payment=await request(http()).post(`/api/v1/me/settlements/${settlement.body.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','registered-transfer-upload').attach('file',Buffer.from('%PDF-1.7\nregistered'),{filename:'receipt.pdf',contentType:'application/pdf'}).expect(201);
+    await request(http()).get(`/api/v1/me/payments/${payment.body.id}/receipt`).set('Authorization',auth(tokens.client)).expect(200);
   });
 });

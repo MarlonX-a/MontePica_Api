@@ -23,7 +23,15 @@ describe('validateEnvironment', () => {
       DB_LOGGING: false,
       CORS_ORIGINS: ['http://localhost:8081'],
       JWT_ACCESS_SECRET: required.JWT_ACCESS_SECRET,
+      TRANSFER_PAYMENTS_ENABLED: false,
+      S3_REGION: '', S3_BUCKET: '', S3_ACCESS_KEY_ID: '', S3_SECRET_ACCESS_KEY: '',
+      S3_ENDPOINT: '', S3_PREFIX: 'montepica/receipts/', S3_FORCE_PATH_STYLE: false,
     });
+  });
+
+  it('requires S3 credentials when transfers are enabled', () => {
+    expect(() => validateEnvironment({ ...required, TRANSFER_PAYMENTS_ENABLED: 'true' })).toThrow('S3_REGION');
+    expect(() => validateEnvironment({ ...required, S3_PREFIX: '../unsafe/' })).toThrow('S3_PREFIX');
   });
 
   it('rejects missing credentials and invalid ports', () => {

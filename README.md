@@ -256,6 +256,93 @@ Crear y aprobar solicitudes exige mesa activa y jornada abierta de la fecha oper
 
 Las cuentas están vacías hasta implementar pedidos. La identidad del cliente procede del token, no de campos de la solicitud. Las operaciones, sus eventos de auditoría y sus respuestas idempotentes se guardan en una transacción; el QR no se guarda en texto en auditoría ni idempotencia. No se añade una migración en esta entrega: utiliza las tablas de la migración `1793600000000-CreateTableVisits`.
 
+## Etapa 6A: pedidos en el local
+
+Un cliente o invitado con participación aprobada puede enviar un pedido para su propia cuenta con `POST /api/v1/visits/:id/orders`, usando el token de cliente y el encabezado `Idempotency-Key`. El cuerpo es, por ejemplo:
+
+```json
+{ "items": [{ "productId": "UUID-del-producto", "quantity": 2, "notes": "Sin picante" }], "notes": "Para compartir" }
+```
+
+Las observaciones son opcionales. La API obtiene los precios del catálogo, guarda los importes históricos y reserva las existencias de productos con inventario. El pedido completo se rechaza si falta stock. Repetir la misma clave y cuerpo devuelve la respuesta original.
+
+El cliente consulta `GET /api/v1/me/orders` y `GET /api/v1/me/orders/:id`. Administradores y trabajadores pueden consultar `GET /api/v1/admin/orders` y `GET /api/v1/admin/orders/:id` con el permiso `orders.read`. Las listas aceptan `page`, `limit` y `visitId`; la administrativa también admite `tableId` y `operatingDayId`.
+
+Para probar desde Swagger, aplica la migración en la base de prueba, abre una jornada, inicializa el inventario, abre una visita y aprueba un participante según la etapa 5B. Autoriza el token del cliente y envía el pedido. Las cuentas con consumo pendiente no se pueden cerrar: las reservas se resolverán en la etapa 6B.
+
+## Etapa 6B: edición y preparación de pedidos
+
+La configuración `localOrderEditSeconds` se consulta y actualiza en `/api/v1/admin/operations/settings` (0 a 3600 segundos; inicial 300). El plazo se fija al crear el pedido. El cliente consulta `editableUntil` y `canEdit` y puede reemplazar su pedido mediante `PUT /api/v1/me/orders/:id` con `Idempotency-Key` y este cuerpo:
+
+```json
+{ "expectedVersion": 1, "items": [{ "productId": "UUID-del-producto", "quantity": 2 }], "notes": "Para compartir" }
+```
+
+El personal con `orders.manage` usa `POST /api/v1/admin/orders/:id/start-preparation`, `/ready` y `/deliver`, cada uno con `Idempotency-Key` y `{ "expectedVersion": 2 }`. Al comenzar la preparación se consume el inventario reservado. Cliente y personal pueden anular un pedido `submitted` mediante `POST /api/v1/me/orders/:id/cancel` o `POST /api/v1/admin/orders/:id/cancel`, enviando `{ "expectedVersion": 1, "reason": "Motivo" }` y una clave idempotente; la anulación libera las reservas.
+
+Para probar el flujo en Swagger, inicia sesión como personal y abre jornada y visita; crea un invitado o inicia sesión como cliente, solicita y recibe aprobación, y envía el pedido como se indica en la etapa 6A. Configura `client-token` para editar o anular y `access-token` para preparar, marcar listo y entregar. Las versiones e historial están en `GET /api/v1/me/orders/:id/history` y `GET /api/v1/admin/orders/:id/history`. Las listas aceptan el filtro `status`.
+
+## Etapa 7A: cuentas y liquidaciones
+
+El cliente o invitado consulta sus cuentas en `GET /api/v1/me/accounts`, su consumo en `GET /api/v1/me/accounts/:id` y una liquidación en `GET /api/v1/me/settlements/:id`, usando `client-token`. Los importes son centavos en USD y representan consumo pendiente de cobro.
+
+El personal con `accounts.read` consulta `/api/v1/admin/accounts` y `/api/v1/admin/accounts/:id`. Con `settlements.read` consulta `/api/v1/admin/settlements` y `/api/v1/admin/settlements/:id`. Las listas aceptan `page` y `limit`, además de los filtros documentados en Swagger.
+
+Para preparar una liquidación, entrega todos los pedidos de la cuenta, abre la caja de la jornada actual y usa `POST /api/v1/admin/accounts/:id/settlements` con `access-token`, cuerpo `{}` e `Idempotency-Key`. Se conservan cantidades y precios del pedido. Mientras la liquidación esté pendiente, no se permiten pedidos nuevos en esa cuenta.
+
+Para anularla, usa `POST /api/v1/admin/settlements/:id/cancel` con `Idempotency-Key` y `{ "reason": "Motivo" }`. Los detalles se conservan en el historial y la cuenta vuelve a admitir pedidos cuando las condiciones operativas lo permitan. La anulación no elimina el consumo ni registra pagos. El cobro se incorporará en la etapa 7B.
+
+## Etapa 7B: cobro en efectivo
+
+Después de preparar la liquidación como se indica en la etapa 7A, el personal con `payments.collect` puede cobrarla desde Swagger con `POST /api/v1/admin/settlements/:id/cash-payments`, `access-token`, `Idempotency-Key` y, por ejemplo, `{ "receivedCents": 1000 }`. La API obtiene el total de la liquidación, calcula el cambio y registra como ingreso únicamente el importe cobrado. La caja vinculada debe estar abierta en la jornada actual.
+
+Para una liquidación de cero, usa `POST /api/v1/admin/settlements/:id/complete-without-payment`, cuerpo `{}` y clave idempotente. El cierre no crea un pago. En ambos casos se cierran la cuenta y la participación; el personal puede cerrar la visita cuando las demás cuentas no tengan pendientes.
+
+El cliente consulta sus pagos en `/api/v1/me/payments` y `/api/v1/me/payments/:id` con `client-token`. El personal con `payments.read` usa `/api/v1/admin/payments` y `/api/v1/admin/payments/:id`. Las cuentas muestran consumo histórico, importe pagado y pendiente. Transferencias y devoluciones pertenecen a entregas posteriores.
+
+## Etapa 7C: transferencias y comprobantes
+
+### Almacenamiento local con Docker
+
+Para desarrollo, `compose.storage.yaml` ejecuta SeaweedFS, un almacenamiento compatible con S3. PostgreSQL sigue funcionando en tu computadora. La API S3 se expone en `http://127.0.0.1:9000`, accesible solo desde la máquina local. Los archivos y sus metadatos se conservan en un volumen de Docker. Esta configuración no incluye una consola web.
+
+Configura en `.env` `S3_ENDPOINT=http://127.0.0.1:9000`, `S3_REGION=us-east-1`, `S3_BUCKET=montepica-receipts`, `S3_PREFIX=montepica/receipts/` y `S3_FORCE_PATH_STYLE=true`. Define `S3_ACCESS_KEY_ID` y `S3_SECRET_ACCESS_KEY` con credenciales locales propias. `storage:up` genera una configuración privada de acceso en `.local/storage/`, que Git ignora. No subas las credenciales a Git.
+
+Con Docker Desktop iniciado, ejecuta:
+
+```bash
+npm run storage:up
+npm run storage:init
+```
+
+El segundo comando crea el bucket si todavía no existe. Una vez inicializado, configura `TRANSFER_PAYMENTS_ENABLED=true` en `.env` y reinicia el backend. Para detener el almacenamiento sin borrar los archivos, usa `npm run storage:stop`. Evita eliminar el volumen si necesitas conservar los comprobantes.
+
+La etapa 7C también requiere su migración. Antes de ejecutarla, confirma que `.env` apunta a la base deseada y ejecuta `npm run migration:run`. El almacenamiento local es para desarrollo; un despliegue requiere almacenamiento privado persistente accesible desde el servidor.
+
+Las transferencias están deshabilitadas por defecto. Para habilitarlas, configura en `.env` `TRANSFER_PAYMENTS_ENABLED=true`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID` y `S3_SECRET_ACCESS_KEY`; opcionalmente configura `S3_ENDPOINT`, `S3_PREFIX` y `S3_FORCE_PATH_STYLE` para tu proveedor compatible con S3. El bucket debe ser privado. Comprueba con tu proveedor la escritura, lectura y eliminación de un objeto antes de usar esta función con comprobantes reales.
+
+Con la caja y la liquidación abiertas, el cliente o invitado envía el comprobante desde Swagger mediante `POST /api/v1/me/settlements/:id/transfer-payments`, `client-token`, `Idempotency-Key` y un archivo `file` en multipart. El personal puede usar `POST /api/v1/admin/settlements/:id/transfer-payments` con `access-token`. Se aceptan JPEG, PNG o PDF de hasta 5 MiB.
+
+El personal descarga el archivo con `GET /api/v1/admin/payments/:id/receipt` y, tras verificar el ingreso, confirma mediante `POST /api/v1/admin/payments/:id/confirm` con `{ "bankOperationReference": "REFERENCIA" }`, o rechaza con `POST /api/v1/admin/payments/:id/reject` y `{ "reason": "Motivo" }`. Las decisiones requieren `Idempotency-Key`. El cliente puede descargar su comprobante desde `GET /api/v1/me/payments/:id/receipt`.
+
+Un rechazo conserva el historial y permite otro intento o un cobro en efectivo. Una transferencia pendiente bloquea otros cobros y la anulación de la liquidación. Confirmar cierra la cuenta y participación; no registra efectivo en caja.
+
+Para eliminar objetos huérfanos de más de 24 horas, con la configuración S3 y de PostgreSQL del entorno correcto, ejecuta `npm run receipts:reconcile`. El comando solo inspecciona el prefijo configurado, comprueba referencias en la base y muestra cuántos objetos revisó y eliminó.
+
+## Etapa 8A: cobertura de domicilios
+
+El administrador configura una versión mediante `PUT /api/v1/admin/delivery/settings` con `access-token`, `Idempotency-Key` y, por ejemplo, `{ "enabled": true, "coverageDescription": "Centro", "shippingFeeCents": 250 }`. La tarifa está expresada en centavos; cero permite envío gratuito. La configuración inicial está deshabilitada. Consulta la versión pública en `GET /api/v1/delivery/settings`.
+
+Con la jornada abierta, un cliente registrado configura su JWT en `client-token` y envía `POST /api/v1/me/delivery-requests` con `Idempotency-Key`:
+
+```json
+{ "configurationVersion": 2, "recipientName": "María", "phone": "0987654321", "address": "Calle principal 123", "references": "Casa azul", "latitude": -0.2, "longitude": -80.1 }
+```
+
+Referencias son opcionales; latitud y longitud se envían juntas o se omiten. El cliente consulta `/api/v1/me/delivery-requests` y su detalle por ID, o cancela con `POST /api/v1/me/delivery-requests/:id/cancel`. El personal con `delivery.read` consulta `/api/v1/admin/delivery-requests`; con `delivery.review` aprueba mediante `POST /api/v1/admin/delivery-requests/:id/approve` o rechaza mediante `/reject` con `{ "reason": "Motivo" }`. Las decisiones y cancelación requieren `Idempotency-Key`.
+
+La aprobación conserva la tarifa de la solicitud. `usableToday` indica si sigue vigente en la jornada y configuración actuales. Cambiar la configuración impide aprobar solicitudes pendientes de la versión anterior. Esta etapa revisa cobertura; todavía no crea pedidos ni cobros a domicilio.
+
 ## Migraciones
 
 La sincronización automática del esquema está desactivada. Las tablas se añadirán mediante migraciones conforme se implementen los módulos del negocio.
