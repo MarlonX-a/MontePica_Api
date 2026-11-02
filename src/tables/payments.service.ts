@@ -21,8 +21,9 @@ export class PaymentsService {
     const zero=receivedCents===null;
     return this.idempotency.run({userId:actor.userId},`settlements/${id.toLowerCase()}/${zero?'complete-without-payment':'cash-payments'}`,key,zero?{}:{receivedCents},zero?200:201,'liquidacion',m=>this.authorize(m,actor),async m=>{
       const zone=await lockTableOperations(m);
-      const [ref]=await m.query(`SELECT l.id_cuenta,c.id_participante,p.id_visita,l.id_caja FROM liquidacion l JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta JOIN participante p ON p.id_participante=c.id_participante WHERE l.id_liquidacion=$1`,[id]);
+      const [ref]=await m.query(`SELECT l.id_cuenta,c.id_participante,c.modalidad,p.id_visita,l.id_caja FROM liquidacion l JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta LEFT JOIN participante p ON p.id_participante=c.id_participante WHERE l.id_liquidacion=$1`,[id]);
       if (!ref) throw new NotFoundException('Liquidación no encontrada.');
+      if (ref.modalidad==='delivery') throw new ConflictException('Los domicilios requieren transferencia.');
       const [cash]=await m.query(`SELECT c.estado,j.estado AS day_status,j.fecha_operativa=timezone($2,clock_timestamp())::date AS current FROM caja c JOIN jornada_operativa j ON j.id_jornada=c.id_jornada WHERE c.id_caja=$1 FOR UPDATE OF j,c`,[ref.id_caja,zone]);
       if (!cash || cash.estado!=='open' || cash.day_status!=='open' || !cash.current) throw new ConflictException('La caja debe estar abierta en la jornada actual.');
       await m.query('SELECT 1 FROM visita_mesa WHERE id_visita=$1 FOR UPDATE',[ref.id_visita]);

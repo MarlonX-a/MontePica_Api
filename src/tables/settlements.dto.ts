@@ -7,6 +7,7 @@ export class SettlementCancelDto {
   @ApiProperty({ minLength: 1, maxLength: 500 }) @Transform(({value}: {value: unknown}) => typeof value === 'string' ? value.trim() : value) @IsString() @Length(1,500) reason: string;
 }
 export class AccountListDto {
+  @ApiPropertyOptional({enum:['local','delivery']}) @ValidateIf((_o,v)=>v!==undefined) @IsIn(['local','delivery']) modality?:string;
   @ApiPropertyOptional({default:1}) @Type(() => Number) @IsInt() @Min(1) @Max(2147483647) page=1;
   @ApiPropertyOptional({default:20,maximum:100}) @Type(() => Number) @IsInt() @Min(1) @Max(100) limit=20;
   @ApiPropertyOptional({enum:['open','closed']}) @ValidateIf((_o,v) => v !== undefined) @IsIn(['open','closed']) status?: string;
@@ -48,7 +49,7 @@ export class SettlementResponseDto {
   @ApiProperty({format:'uuid'}) cashRegisterId:string;
   @ApiProperty({enum:['pending','cancelled','settled']}) status:string;
   @ApiProperty({type:String,nullable:true,format:'date-time'}) settledAt:string|null;
-  @ApiProperty({type:String,nullable:true,enum:['cash','zeroTotal']}) resolution:string|null;
+  @ApiProperty({type:String,nullable:true,enum:['cash','zeroTotal','transfer']}) resolution:string|null;
   @ApiProperty({type:String,nullable:true,format:'uuid'}) paymentId:string|null;
   @ApiProperty() productsCents:number;
   @ApiProperty() shippingCents:number;
@@ -67,11 +68,14 @@ export class PendingSettlementDto {
   @ApiProperty() totalCents:number;
 }
 export class AccountResponseDto {
+  @ApiProperty({enum:['local','delivery']}) modality:string;
+  @ApiProperty() productsCents:number;
+  @ApiProperty() shippingCents:number;
   @ApiProperty({format:'uuid'}) id:string;
   @ApiProperty({format:'uuid'}) clientId:string;
-  @ApiProperty({format:'uuid'}) participantId:string;
+  @ApiProperty({type:String,format:'uuid',nullable:true}) participantId:string|null;
   @ApiProperty({format:'uuid'}) operatingDayId:string;
-  @ApiProperty({format:'uuid'}) visitId:string;
+  @ApiProperty({type:String,format:'uuid',nullable:true}) visitId:string|null;
   @ApiProperty({enum:['open','closed']}) status:string;
   @ApiProperty({format:'date-time'}) createdAt:string;
   @ApiProperty({type:String,nullable:true,format:'date-time'}) closedAt:string|null;

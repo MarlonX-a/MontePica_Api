@@ -26,7 +26,7 @@ export function createDatabaseOptions(
     password: env.DB_PASSWORD,
     database: env.DB_NAME,
     entities: [Category, Product, Client, Profile, Role, User, UserSession],
-    migrations: [join(databaseDirectory, 'migrations/*{.ts,.js}')],
+    migrations: [join(databaseDirectory, 'migrations/*{.ts,.js}').replaceAll('\\', '/')],
     synchronize: false,
     migrationsRun: false,
     logging: env.DB_LOGGING,

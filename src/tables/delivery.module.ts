@@ -1,3 +1,4 @@
+import { OrdersService } from './orders.service.js';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { ClientAccessGuard } from './client-access.guard.js';
@@ -7,5 +8,5 @@ import { ParticipantsService } from './participants.service.js';
 import { AdminDeliveryController, ClientDeliveryController, DeliveryPublicController, RegisteredClientGuard } from './delivery.controller.js';
 import { DeliveryService } from './delivery.service.js';
 
-@Module({imports:[AuthModule],controllers:[DeliveryPublicController,ClientDeliveryController,AdminDeliveryController],providers:[ClientAccessGuard,GuestSessionsService,ParticipationIdempotencyService,ParticipantsService,RegisteredClientGuard,DeliveryService]})
+@Module({imports:[AuthModule],controllers:[DeliveryPublicController,ClientDeliveryController,AdminDeliveryController],providers:[ClientAccessGuard,GuestSessionsService,ParticipationIdempotencyService,ParticipantsService,RegisteredClientGuard,DeliveryService,OrdersService]})
 export class DeliveryModule {}

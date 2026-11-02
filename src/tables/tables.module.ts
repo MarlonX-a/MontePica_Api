@@ -1,3 +1,4 @@
+import { DeliveryExpiryService } from './delivery-expiry.service.js';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { TablesController } from './tables.controller.js';
@@ -23,6 +24,6 @@ import { TransfersService } from './transfers.service.js';
 @Module({
   imports: [AuthModule],
   controllers: [TablesController, GuestSessionsController, TableAccessController, ClientParticipantsController, AdminParticipantsController, ClientOrdersController, AdminOrdersController, ClientSettlementsController, AdminSettlementsController, ClientPaymentsController, AdminPaymentsController, ClientTransfersController, AdminTransfersController],
-  providers: [TablesService, GuestSessionsService, TableAccessService, ClientAccessGuard, GuestSessionGuard, ParticipantsService, ParticipationIdempotencyService, OrdersService, SettlementsService, PaymentsService, ReceiptStorageService, TransfersService],
+  providers: [DeliveryExpiryService, TablesService, GuestSessionsService, TableAccessService, ClientAccessGuard, GuestSessionGuard, ParticipantsService, ParticipationIdempotencyService, OrdersService, SettlementsService, PaymentsService, ReceiptStorageService, TransfersService],
 })
 export class TablesModule {}

@@ -13,6 +13,7 @@ import { Profile } from '../src/auth/entities/profile.entity.js';
 import { Role } from '../src/auth/entities/role.entity.js';
 import { User } from '../src/auth/entities/user.entity.js';
 import { UserSession } from '../src/auth/entities/user-session.entity.js';
+import { DeliveryExpiryService } from '../src/tables/delivery-expiry.service.js';
 import { AuthService } from '../src/auth/auth.service.js';
 
 describe('API foundation (e2e)', () => {
@@ -71,6 +72,8 @@ describe('API foundation (e2e)', () => {
     const moduleFixture = await Test.createTestingModule({
       imports: [AppModule],
     })
+      .overrideProvider(DeliveryExpiryService)
+      .useValue({})
       .overrideProvider(DataSource)
       .useValue({ query, manager: {} })
       .overrideProvider(getRepositoryToken(Category))

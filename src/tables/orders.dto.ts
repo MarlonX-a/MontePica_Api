@@ -22,7 +22,8 @@ export class CancelOrderDto extends OrderTransitionDto {
   @ApiProperty({ minLength: 1, maxLength: 500 }) @Transform(trim) @IsString() @Length(1, 500) reason: string;
 }
 export class OrderQueryDto {
-  @ApiPropertyOptional({ enum:['submitted','preparing','ready','delivered','cancelled'] }) @ValidateIf((_o, v) => v !== undefined) @IsIn(['submitted','preparing','ready','delivered','cancelled']) status?: string;
+  @ApiPropertyOptional({enum:['local','delivery']}) @ValidateIf((_o,v)=>v!==undefined) @IsIn(['local','delivery']) modality?:string;
+  @ApiPropertyOptional({ enum:['submitted','preparing','ready','dispatched','delivered','cancelled'] }) @ValidateIf((_o, v) => v !== undefined) @IsIn(['submitted','preparing','ready','dispatched','delivered','cancelled']) status?: string;
   @ApiPropertyOptional({ default: 1 }) @Type(() => Number) @IsInt() @Min(1) @Max(2147483647) page = 1;
   @ApiPropertyOptional({ default: 20, maximum: 100 }) @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 20;
   @ApiPropertyOptional({ format: 'uuid' }) @ValidateIf((_o, v) => v !== undefined) @IsUUID() visitId?: string;
@@ -40,12 +41,37 @@ export class OrderDetailItemDto {
   @ApiProperty() tracksInventory: boolean;
   @ApiProperty({ type: String, nullable: true }) notes: string | null;
 }
+export class DeliverySnapshotDto {
+  @ApiProperty({type:String,nullable:true,format:'date-time'}) receiptSubmissionDeadline:string|null;
+  @ApiProperty({type:String,nullable:true,format:'date-time'}) dispatchedAt:string|null;
+  @ApiProperty({type:String,nullable:true,format:'date-time'}) deliveredAt:string|null;
+  @ApiProperty({type:String,nullable:true,format:'uuid'}) dispatchedBy:string|null;
+  @ApiProperty({type:String,nullable:true,format:'uuid'}) deliveredBy:string|null;
+  @ApiProperty({format:'uuid'}) requestId:string;
+  @ApiProperty() recipientName:string;
+  @ApiProperty() phone:string;
+  @ApiProperty() address:string;
+  @ApiProperty({type:String,nullable:true}) references:string|null;
+  @ApiProperty({type:Number,nullable:true}) latitude:number|null;
+  @ApiProperty({type:Number,nullable:true}) longitude:number|null;
+  @ApiProperty() configurationVersion:number;
+  @ApiProperty() shippingCents:number;
+}
+export class OrderSettlementDto {
+  @ApiProperty({format:'uuid'}) id:string;
+  @ApiProperty() status:string;
+}
 export class OrderResponseDto {
+  @ApiProperty({enum:['local','delivery']}) modality:string;
+  @ApiProperty() productsCents:number;
+  @ApiProperty() shippingCents:number;
+  @ApiPropertyOptional({type:DeliverySnapshotDto,nullable:true,description:'Solo en detalle; se omite en listados.'}) delivery?:DeliverySnapshotDto|null;
+  @ApiProperty({type:OrderSettlementDto,nullable:true}) settlement:OrderSettlementDto|null;
   @ApiProperty({ format: 'uuid' }) id: string;
-  @ApiProperty({ format: 'uuid' }) visitId: string;
+  @ApiProperty({ type:String,format: 'uuid',nullable:true }) visitId: string|null;
   @ApiProperty({ format: 'uuid' }) operatingDayId: string;
   @ApiProperty({ format: 'uuid' }) accountId: string;
-  @ApiProperty({ enum: ['submitted','preparing','ready','delivered','cancelled'] }) status: string;
+  @ApiProperty({ enum: ['submitted','preparing','ready','dispatched','delivered','cancelled'] }) status: string;
   @ApiProperty({ type:String, nullable:true, format:'date-time' }) editableUntil: string | null;
   @ApiProperty() canEdit: boolean;
   @ApiProperty({ format: 'date-time' }) submittedAt: string;

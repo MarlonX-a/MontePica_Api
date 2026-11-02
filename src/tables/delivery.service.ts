@@ -20,14 +20,14 @@ export class DeliveryService {
   }
 
   async settings(m:EntityManager=this.db.manager) {
-    const [row]=await m.query(`SELECT id_configuracion AS id,version,habilitado AS enabled,cobertura AS "coverageDescription",tarifa_ctvs::float8 AS "shippingFeeCents",'USD' AS currency,configurada_por AS "configuredBy",creada_en AS "createdAt" FROM config_domicilio ORDER BY version DESC LIMIT 1`);
+    const [row]=await m.query(`SELECT id_configuracion AS id,version,comprobante_plazo_seg AS "receiptSubmissionSeconds",habilitado AS enabled,cobertura AS "coverageDescription",tarifa_ctvs::float8 AS "shippingFeeCents",'USD' AS currency,configurada_por AS "configuredBy",creada_en AS "createdAt" FROM config_domicilio ORDER BY version DESC LIMIT 1`);
     return row;
   }
 
   async updateSettings(dto:DeliverySettingsDto,actor:AuthenticatedRequestContext,key?:string) {
     return this.keys.run({userId:actor.userId},'delivery/settings',key,dto,200,'config_domicilio',m=>this.staff(m,actor,'delivery.configure'),async m=>{
       await lockTableOperations(m); const before=await this.settings(m);
-      const [row]=await m.query(`INSERT INTO config_domicilio(version,habilitado,cobertura,tarifa_ctvs,configurada_por) VALUES ($1,$2,$3,$4,$5) RETURNING id_configuracion AS id`,[before.version+1,dto.enabled,dto.coverageDescription,dto.shippingFeeCents,actor.userId]);
+      const [row]=await m.query(`INSERT INTO config_domicilio(version,habilitado,cobertura,tarifa_ctvs,configurada_por,comprobante_plazo_seg) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id_configuracion AS id`,[before.version+1,dto.enabled,dto.coverageDescription,dto.shippingFeeCents,actor.userId,dto.receiptSubmissionSeconds]);
       const response=await this.settings(m); await auditTableOperation(m,{userId:actor.userId},'config_domicilio',row.id,'delivery.settings_updated',{before,after:response});
       return {resourceId:row.id,response};
     });
@@ -71,6 +71,8 @@ export class DeliveryService {
       const day=action==='approve'?await this.activeDay(m,zone):null;
       const [row]=await m.query(`SELECT s.estado,s.id_jornada,s.id_configuracion,c.version FROM solicitud_domicilio s JOIN config_domicilio c ON c.id_configuracion=s.id_configuracion WHERE s.id_solicitud=$1 FOR UPDATE OF s`,[id]);
       if (!row) throw new NotFoundException('Solicitud de domicilio no encontrada.');
+      const [used]=await m.query('SELECT 1 FROM entrega_domicilio WHERE id_solicitud=$1',[id]);
+      if (used) throw new ConflictException('La solicitud ya está vinculada a un pedido.');
       if (action==='cancel' ? !['pending','approved'].includes(row.estado) : row.estado!=='pending') throw new ConflictException('La solicitud no permite esa transición.');
       if (action==='approve' && (!settings.enabled || settings.version!==row.version || day!==row.id_jornada)) throw new ConflictException('La solicitud pertenece a otra jornada o configuración.');
       const status=action==='approve'?'approved':action==='reject'?'rejected':'cancelled';

@@ -1,3 +1,4 @@
+import { expireDelivery } from './delivery-expiry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException, UnsupportedMediaTypeException } from '@nestjs/common';
 import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
@@ -49,6 +50,8 @@ export class TransfersService {
         if (account.estado!=='open' || settlement.estado!=='pending' || !Number.isSafeInteger(settlement.total) || settlement.total<=0) throw new ConflictException('La liquidación no admite transferencias.');
         const [pending]=await m.query(`SELECT 1 FROM pago WHERE id_liquidacion=$1 AND estado='pendingVerification'`,[id]);
         if (pending) throw new ConflictException('Ya existe una transferencia pendiente.');
+        const [expired]=await m.query(`SELECT 1 FROM entrega_domicilio e JOIN pedido o ON o.id_pedido=e.id_pedido WHERE o.id_cuenta=$1 AND e.comprobante_hasta<=clock_timestamp()`,[ref.id_cuenta]);
+        if(expired) throw new ConflictException('El plazo para presentar el comprobante vencio.');
         uploaded=this.storage.prefix+randomUUID(); await this.storage.put(uploaded,file.buffer,mime);
         const [payment]=await m.query(`INSERT INTO pago(id_liquidacion,metodo,estado,importe_ctvs,registrado_usuario,registrado_sesion_cliente,pagador_cliente) VALUES ($1,'transfer','pendingVerification',$2,$3,$4,$5) RETURNING id_pago AS id`,[id,settlement.total,actor.userId ?? null,actor.guestSessionId ?? null,ref.id_cliente]);
         await m.query('INSERT INTO comprobante(id_pago,archivo_privado,mime,tamano,sha256) VALUES ($1,$2,$3,$4,$5)',[payment.id,uploaded,mime,file.buffer.length,hash]);
@@ -73,7 +76,7 @@ export class TransfersService {
     try {
       return await this.keys.run({userId:actor.userId},`payments/${id.toLowerCase()}/${decision}`,key,{value:normalized},200,'pago',m=>this.staff(m,actor,'payments.verify'),async m=>{
         const zone=await lockTableOperations(m);
-        const [ref]=await m.query(`SELECT p.id_liquidacion,l.id_cuenta,l.id_caja,c.id_participante,part.id_visita FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta JOIN participante part ON part.id_participante=c.id_participante WHERE p.id_pago=$1`,[id]);
+        const [ref]=await m.query(`SELECT p.id_liquidacion,l.id_cuenta,l.id_caja,c.id_participante,c.modalidad,part.id_visita FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta LEFT JOIN participante part ON part.id_participante=c.id_participante WHERE p.id_pago=$1`,[id]);
         if (!ref) throw new NotFoundException('Pago no encontrado.');
         if (decision==='confirm') {const [cash]=await m.query(`SELECT c.estado,j.estado AS day_status,j.fecha_operativa=timezone($2,clock_timestamp())::date AS current FROM caja c JOIN jornada_operativa j ON j.id_jornada=c.id_jornada WHERE c.id_caja=$1 FOR UPDATE OF j,c`,[ref.id_caja,zone]); if (!cash || cash.estado!=='open' || cash.day_status!=='open' || !cash.current) throw new ConflictException('La caja debe estar abierta en la jornada actual.');}
         await m.query('SELECT 1 FROM visita_mesa WHERE id_visita=$1 FOR UPDATE',[ref.id_visita]);
@@ -81,17 +84,21 @@ export class TransfersService {
         const [account]=await m.query('SELECT estado FROM cuenta_consumo WHERE id_cuenta=$1 FOR UPDATE',[ref.id_cuenta]);
         const [settlement]=await m.query('SELECT estado FROM liquidacion WHERE id_liquidacion=$1 FOR UPDATE',[ref.id_liquidacion]);
         const [payment]=await m.query('SELECT estado,metodo FROM pago WHERE id_pago=$1 FOR UPDATE',[id]);
-        if (payment.metodo!=='transfer' || payment.estado!=='pendingVerification' || settlement.estado!=='pending' || account.estado!=='open' || participant.estado!=='approved') throw new ConflictException('El pago ya no está pendiente.');
+        if (payment.metodo!=='transfer' || payment.estado!=='pendingVerification' || settlement.estado!=='pending' || account.estado!=='open' || (ref.modalidad==='local' && participant?.estado!=='approved')) throw new ConflictException('El pago ya no está pendiente.');
         const status=decision==='confirm'?'confirmed':'rejected';
         await m.query(`UPDATE pago SET estado=$2,verificado_por=$3,verificado_en=clock_timestamp(),operacion_bancaria_confirmada=$4,motivo_rechazo=$5 WHERE id_pago=$1`,[id,status,actor.userId,decision==='confirm'?normalized:null,decision==='reject'?normalized:null]);
         if (decision==='confirm') {
           await m.query(`UPDATE liquidacion SET estado='settled',cerrada_en=clock_timestamp(),cerrada_por=$2,resolucion='transfer' WHERE id_liquidacion=$1`,[ref.id_liquidacion,actor.userId]);
-          await m.query(`UPDATE cuenta_consumo SET estado='closed',cerrada_en=clock_timestamp() WHERE id_cuenta=$1`,[ref.id_cuenta]);
-          await m.query(`UPDATE participante SET estado='finished',finalizada_en=clock_timestamp() WHERE id_participante=$1`,[ref.id_participante]);
+          if (ref.modalidad==='local') await m.query(`UPDATE cuenta_consumo SET estado='closed',cerrada_en=clock_timestamp() WHERE id_cuenta=$1`,[ref.id_cuenta]);
+          if (ref.modalidad==='local') await m.query(`UPDATE participante SET estado='finished',finalizada_en=clock_timestamp() WHERE id_participante=$1`,[ref.id_participante]);
+        }
+        if(decision==='reject') {
+          const [order]=await m.query(`SELECT id_pedido FROM pedido WHERE id_cuenta=$1 AND modalidad='delivery'`,[ref.id_cuenta]);
+          if(order) await expireDelivery(m,order.id_pedido);
         }
         await m.query(`INSERT INTO historial_pago(id_pago,actor_usuario,estado_anterior,estado_nuevo,evento) VALUES ($1,$2,'pendingVerification',$3,$4)`,[id,actor.userId,status,`transfer.${decision}`]);
         await auditTableOperation(m,{userId:actor.userId},'pago',id,`transfer.${decision}`,{settlementId:ref.id_liquidacion,reason:decision==='reject'?normalized:null});
-        return {resourceId:id,response:{id,settlementId:ref.id_liquidacion,status,settlementStatus:decision==='confirm'?'settled':'pending'}};
+        return {resourceId:id,response:{id,settlementId:ref.id_liquidacion,status,settlementStatus:(await m.query('SELECT estado FROM liquidacion WHERE id_liquidacion=$1',[ref.id_liquidacion]))[0].estado}};
       });
     } catch (error) {
       if (error instanceof QueryFailedError && (error as QueryFailedError & {driverError?:{code?:string}}).driverError?.code==='23505') throw new ConflictException('La referencia bancaria ya fue confirmada.');

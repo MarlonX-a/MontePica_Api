@@ -26,6 +26,9 @@ import { CreateSettlements1793900000000 } from '../src/database/migrations/17939
 import { CreateCashPayments1794000000000 } from '../src/database/migrations/1794000000000-CreateCashPayments.js';
 import { CreateTransferReceipts1794100000000 } from '../src/database/migrations/1794100000000-CreateTransferReceipts.js';
 import { CreateDeliveryCoverage1794200000000 } from '../src/database/migrations/1794200000000-CreateDeliveryCoverage.js';
+import { DeliveryOrders1794300000000 } from '../src/database/migrations/1794300000000-DeliveryOrders.js';
+import { DeliveryFulfillment1794400000000 } from '../src/database/migrations/1794400000000-DeliveryFulfillment.js';
+import { DeliveryExpiryService } from '../src/tables/delivery-expiry.service.js';
 import { ReceiptStorageService } from '../src/tables/receipt-storage.service.js';
 
 // Opt-in only: credentials from .env are used against postgres to CREATE a fresh, disposable database.
@@ -59,7 +62,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     created = true;
     db = new DataSource({ ...options, migrations: [CreateCatalogTables1792080000000, CreateIdentityTables1792340000000,
       CreatePermissionsAndAudit1792600000000, AllowUncategorizedProducts1793200000000, RequireProductCategory1793300000000,
-      CreateOperationsOpening1793400000000, CreateDailyInventory1793500000000, CreateTableVisits1793600000000, CreateLocalOrders1793700000000, OrderLifecycle1793800000000, CreateSettlements1793900000000, CreateCashPayments1794000000000, CreateTransferReceipts1794100000000, CreateDeliveryCoverage1794200000000] });
+      CreateOperationsOpening1793400000000, CreateDailyInventory1793500000000, CreateTableVisits1793600000000, CreateLocalOrders1793700000000, OrderLifecycle1793800000000, CreateSettlements1793900000000, CreateCashPayments1794000000000, CreateTransferReceipts1794100000000, CreateDeliveryCoverage1794200000000, DeliveryOrders1794300000000,DeliveryFulfillment1794400000000] });
     await db.initialize();
     await db.runMigrations();
     // Empty-database up/down/up check; never revert a database containing user data.
@@ -731,4 +734,92 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     const payment=await request(http()).post(`/api/v1/me/settlements/${settlement.body.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','registered-transfer-upload').attach('file',Buffer.from('%PDF-1.7\nregistered'),{filename:'receipt.pdf',contentType:'application/pdf'}).expect(201);
     await request(http()).get(`/api/v1/me/payments/${payment.body.id}/receipt`).set('Authorization',auth(tokens.client)).expect(200);
   });
+  it('creates a delivery atomically, collects transfer before preparation and keeps its account open', async () => {
+    const settings=await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','8b-settings').send({enabled:true,coverageDescription:'Centro',shippingFeeCents:200}).expect(200);
+    const makeRequest=async (key:string)=>{
+      const r=await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key',key).send({configurationVersion:settings.body.version,recipientName:'Cliente',phone:'099',address:'Direccion privada'}).expect(201);
+      await request(http()).post(`/api/v1/admin/delivery-requests/${r.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',key+'-approve').send({}).expect(200);return r.body.id;
+    };
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('8B','8b') RETURNING id_categoria`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'8b-product','Producto',500,true) RETURNING id_producto`,[category.id_categoria]);
+    await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,cantidad_reservada,inicializado_por) VALUES ($1,$2,3,3,0,$3)`,[dayId,product.id_producto,users.admin]);
+    const requestId=await makeRequest('8b-request'); const url=`/api/v1/me/delivery-requests/${requestId}/orders`;const body={items:[{productId:product.id_producto,quantity:1}]};
+    const guest=await guests.create({name:'Invitado 8B'});
+    await request(http()).post(url).set('Authorization',auth(guest.token)).set('Idempotency-Key','8b-guest').send(body).expect(401);
+    await request(http()).post(url).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-worker').send(body).expect(403);
+    await failAudit('delivery.order_submitted');
+    try {await request(http()).post(url).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-rollback').send(body).expect(500);} finally {await restoreAudit();}
+    const [rolled]=await db.query('SELECT cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);expect(rolled.cantidad_reservada).toBe(0);
+    const create=()=>request(http()).post(url).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-order').send(body);
+    const [first,replay]=await Promise.all([create(),create()]);expect(first.status).toBe(201);expect(replay.body).toEqual(first.body);const order=first.body;
+    expect(order.totalCents).toBe(700);expect(order.shippingCents).toBe(200);expect(order.modality).toBe('delivery');expect(order.canEdit).toBe(false);
+    await request(http()).post(url).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-second').send(body).expect(409);
+    await request(http()).post(`/api/v1/me/delivery-requests/${requestId}/cancel`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-used').send({}).expect(409);
+    const action=(name:string,key:string)=>request(http()).post(`/api/v1/admin/orders/${order.id}/${name}`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',key).send({expectedVersion:1, ...(name==='cancel'?{reason:'Anular'}:{})});
+    await action('start-preparation','8b-unpaid').expect(409);
+    await request(http()).post(`/api/v1/admin/settlements/${order.settlement.id}/cash-payments`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-cash').send({receivedCents:700}).expect(409);
+    await request(http()).post(`/api/v1/admin/settlements/${order.settlement.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-bill-cancel').send({reason:'Anular'}).expect(409);
+    const listing=await request(http()).get('/api/v1/me/orders?modality=delivery').set('Authorization',auth(tokens.client)).expect(200);expect(listing.body.items.some((o:{id:string})=>o.id===order.id)).toBe(true);expect(listing.body.items[0].delivery).toBeUndefined();
+    const transfer=await request(http()).post(`/api/v1/me/settlements/${order.settlement.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-transfer').attach('file',Buffer.from('%PDF-1.7 receipt'),{filename:'receipt.pdf',contentType:'application/pdf'}).expect(201);
+    await action('cancel','8b-pending-cancel').expect(409);
+    await request(http()).post(`/api/v1/admin/payments/${transfer.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-confirm').send({bankOperationReference:'8B-001'}).expect(200);
+    const account=await request(http()).get(`/api/v1/me/accounts/${order.accountId}`).set('Authorization',auth(tokens.client)).expect(200);expect(account.body.status).toBe('open');expect(account.body.paidCents).toBe(700);expect(account.body.pendingCents).toBe(0);
+    await action('cancel','8b-paid-cancel').expect(409);await action('start-preparation','8b-start').expect(200);await action('start-preparation','8b-start').expect(200);await action('ready','8b-ready').expect(200);await action('deliver','8b-deliver').expect(409);
+    const dispatch=()=>action('dispatch','8c-dispatch');await dispatch().expect(200);await dispatch().expect(200);
+    await action('deliver','8c-deliver').expect(200);
+    const delivered=await request(http()).get(`/api/v1/me/accounts/${order.accountId}`).set('Authorization',auth(tokens.client)).expect(200);expect(delivered.body.status).toBe('closed');
+    const [stock]=await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);expect(stock).toEqual({cantidad_fisica:2,cantidad_reservada:0});
+    await request(http()).get(`/api/v1/me/orders/${order.id}`).set('Authorization',auth(guest.token)).expect(404);
+    await request(http()).get('/api/v1/me/accounts?modality=delivery').set('Authorization',auth(tokens.client)).expect(200);
+    await request(http()).put(`/api/v1/me/orders/${order.id}`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-edit').send({...body,expectedVersion:1}).expect(409);
+    const shortageId=await makeRequest('8b-shortage');const shortageUrl=`/api/v1/me/delivery-requests/${shortageId}/orders`;
+    const send=(payload:unknown,key:string)=>request(http()).post(shortageUrl).set('Authorization',auth(tokens.client)).set('Idempotency-Key',key).send(payload);
+    await send({items:[{productId:product.id_producto,quantity:999}]},'8b-short').expect(409);
+    await send({...body,priceCents:1},'8b-extra').expect(400);
+    await send({items:[body.items[0],body.items[0]]},'8b-duplicates').expect(400);
+    await db.query(`UPDATE producto SET visible_menu=false WHERE id_producto=$1`,[product.id_producto]);
+    await send(body,'8b-hidden').expect(409);await db.query(`UPDATE producto SET visible_menu=true WHERE id_producto=$1`,[product.id_producto]);
+    await db.query(`UPDATE caja SET estado='closed' WHERE id_jornada=$1`,[dayId]);
+    try {await send(body,'8b-closed-cash').expect(409);} finally {await db.query(`UPDATE caja SET estado='open' WHERE id_jornada=$1`,[dayId]);}
+    const cancelId=await makeRequest('8b-cancel-request');const cancelled=await request(http()).post(`/api/v1/me/delivery-requests/${cancelId}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-cancel-order').send(body).expect(201);
+    await request(http()).post(`/api/v1/admin/orders/${cancelled.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-cancel').send({expectedVersion:1,reason:'Sin pago'}).expect(200);
+    const closed=await request(http()).get(`/api/v1/me/accounts/${cancelled.body.accountId}`).set('Authorization',auth(tokens.client)).expect(200);expect(closed.body.status).toBe('closed');
+    const retryId=await makeRequest('8b-reject-request');const retry=await request(http()).post(`/api/v1/me/delivery-requests/${retryId}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-reject-order').send(body).expect(201);
+    const upload=()=>request(http()).post(`/api/v1/me/settlements/${retry.body.settlement.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-reject-upload').attach('file',Buffer.from('%PDF-1.7 receipt'),{filename:'receipt.pdf',contentType:'application/pdf'});
+    const attempt=await upload().expect(201);
+    await db.query(`UPDATE entrega_domicilio SET comprobante_hasta=clock_timestamp()-interval '1 second' WHERE id_pedido=$1`,[retry.body.id]);
+    await app.get(DeliveryExpiryService).sweep();
+    const [pendingReview]=await db.query('SELECT estado FROM pedido WHERE id_pedido=$1',[retry.body.id]);expect(pendingReview.estado).toBe('submitted');
+    await request(http()).post(`/api/v1/admin/payments/${attempt.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-reject').send({reason:'No acreditado'}).expect(200);
+    await request(http()).post(`/api/v1/admin/orders/${retry.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-rejected-cancel').send({expectedVersion:1,reason:'No pagado'}).expect(409);
+    await expect(db.undoLastMigration()).rejects.toThrow('etapa 8C');
+    const freeSettings=await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','8b-free-settings').send({enabled:true,coverageDescription:'Centro',shippingFeeCents:0}).expect(200);
+    const freeRequest=await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-free-request').send({configurationVersion:freeSettings.body.version,recipientName:'Cliente',phone:'099',address:'Direccion'}).expect(201);
+    await request(http()).post(`/api/v1/admin/delivery-requests/${freeRequest.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-free-approve').send({}).expect(200);
+    const [free]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'8b-free','Gratis',0,false) RETURNING id_producto`,[category.id_categoria]);
+    const freeUrl=`/api/v1/me/delivery-requests/${freeRequest.body.id}/orders`;
+    await request(http()).post(freeUrl).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-zero-total').send({items:[{productId:free.id_producto,quantity:1}]}).expect(409);
+    await db.query(`UPDATE producto SET precio_ctvs=100 WHERE id_producto=$1`,[free.id_producto]);
+    const freeShipping=await request(http()).post(freeUrl).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-free-shipping').send({items:[{productId:free.id_producto,quantity:1}]}).expect(201);expect(freeShipping.body.shippingCents).toBe(0);
+    expect(freeShipping.body.delivery.receiptSubmissionDeadline).toBeTruthy();
+    await db.query(`UPDATE entrega_domicilio SET comprobante_hasta=clock_timestamp()-interval '1 second' WHERE id_pedido=$1`,[freeShipping.body.id]);
+    await request(http()).post(`/api/v1/me/settlements/${freeShipping.body.settlement.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','8c-too-late').attach('file',Buffer.from('%PDF-1.7 late'),{filename:'r.pdf',contentType:'application/pdf'}).expect(409);
+    await failAudit('order.expired');
+    try {await app.get(DeliveryExpiryService).sweep();const [saved]=await db.query('SELECT estado FROM pedido WHERE id_pedido=$1',[freeShipping.body.id]);expect(saved.estado).toBe('submitted');}finally{await restoreAudit();}
+    await Promise.all([app.get(DeliveryExpiryService).sweep(),app.get(DeliveryExpiryService).sweep()]);
+    const [expired]=await db.query('SELECT estado FROM pedido WHERE id_pedido=$1',[freeShipping.body.id]);expect(expired.estado).toBe('cancelled');
+
+    const competing:string[]=[];
+    for (let n=0;n<2;n++) {
+      const r=await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key',`8b-stock-request-${n}`).send({configurationVersion:freeSettings.body.version,recipientName:'Cliente',phone:'099',address:'Direccion'}).expect(201);
+      await request(http()).post(`/api/v1/admin/delivery-requests/${r.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`8b-stock-approve-${n}`).send({}).expect(200);competing.push(r.body.id);
+    }
+    const race=await Promise.all(competing.map((id,n)=>request(http()).post(`/api/v1/me/delivery-requests/${id}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key',`8b-stock-${n}`).send({items:[{productId:product.id_producto,quantity:2}]})));
+    expect(race.map(r=>r.status).sort()).toEqual([201,409]);
+    const winner=race.find(r=>r.status===201)!;
+    await request(http()).post(`/api/v1/admin/orders/${winner.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-stock-cancel').send({expectedVersion:1,reason:'Liberar'}).expect(200);
+
+
+  });
+
 });

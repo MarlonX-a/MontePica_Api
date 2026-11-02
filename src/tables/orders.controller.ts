@@ -39,11 +39,13 @@ export class AdminOrdersController {
   @Get(':id/history') @RequirePermission('orders.read') @ApiOkResponse({description:'Versiones e historial del pedido.'})
   history(@Param('id', ParseUUIDPipe) id:string) { return this.service.history(id); }
   @Post(':id/start-preparation') @HttpCode(200) @RequirePermission('orders.manage') @ApiHeader({name:'Idempotency-Key',required:true})
-  start(@Param('id', ParseUUIDPipe) id:string, @Body() dto:OrderTransitionDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'start-preparation',dto,{userId:user.userId},undefined,key); }
+  start(@Param('id', ParseUUIDPipe) id:string, @Body() dto:OrderTransitionDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'start-preparation',dto,user,undefined,key); }
+  @Post(':id/dispatch') @HttpCode(200) @RequirePermission('orders.manage') @ApiHeader({name:'Idempotency-Key',required:true})
+  dispatch(@Param('id', ParseUUIDPipe) id:string,@Body() dto:OrderTransitionDto,@CurrentUserContext() user:AuthenticatedRequestContext,@Headers('idempotency-key') key?:string) {return this.service.transition(id,'dispatch',dto,user,undefined,key);}
   @Post(':id/ready') @HttpCode(200) @RequirePermission('orders.manage') @ApiHeader({name:'Idempotency-Key',required:true})
-  ready(@Param('id', ParseUUIDPipe) id:string, @Body() dto:OrderTransitionDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'ready',dto,{userId:user.userId},undefined,key); }
+  ready(@Param('id', ParseUUIDPipe) id:string, @Body() dto:OrderTransitionDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'ready',dto,user,undefined,key); }
   @Post(':id/deliver') @HttpCode(200) @RequirePermission('orders.manage') @ApiHeader({name:'Idempotency-Key',required:true})
-  deliver(@Param('id', ParseUUIDPipe) id:string, @Body() dto:OrderTransitionDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'deliver',dto,{userId:user.userId},undefined,key); }
+  deliver(@Param('id', ParseUUIDPipe) id:string, @Body() dto:OrderTransitionDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'deliver',dto,user,undefined,key); }
   @Post(':id/cancel') @HttpCode(200) @RequirePermission('orders.manage') @ApiHeader({name:'Idempotency-Key',required:true})
-  cancel(@Param('id', ParseUUIDPipe) id:string, @Body() dto:CancelOrderDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'cancel',dto,{userId:user.userId},undefined,key); }
+  cancel(@Param('id', ParseUUIDPipe) id:string, @Body() dto:CancelOrderDto, @CurrentUserContext() user:AuthenticatedRequestContext, @Headers('idempotency-key') key?:string) { return this.service.transition(id,'cancel',dto,user,undefined,key); }
 }

@@ -18,11 +18,14 @@ export class SettlementsService {
   }
 
   async account(id:string, clientId?:string, m:EntityManager=this.db.manager) {
-    const [account] = await m.query(`SELECT c.id_cuenta AS id,c.id_cliente AS "clientId",c.id_participante AS "participantId",c.id_jornada AS "operatingDayId",p.id_visita AS "visitId",c.estado AS status,c.creada_en AS "createdAt",c.cerrada_en AS "closedAt" FROM cuenta_consumo c JOIN participante p ON p.id_participante=c.id_participante WHERE c.id_cuenta=$1 AND ($2::uuid IS NULL OR c.id_cliente=$2)`,[id,clientId ?? null]);
+    const [account] = await m.query(`SELECT c.id_cuenta AS id,c.modalidad AS modality,c.id_cliente AS "clientId",c.id_participante AS "participantId",c.id_jornada AS "operatingDayId",p.id_visita AS "visitId",c.estado AS status,c.creada_en AS "createdAt",c.cerrada_en AS "closedAt" FROM cuenta_consumo c LEFT JOIN participante p ON p.id_participante=c.id_participante WHERE c.id_cuenta=$1 AND ($2::uuid IS NULL OR c.id_cliente=$2)`,[id,clientId ?? null]);
     if (!account) throw new NotFoundException('Cuenta no encontrada.');
     account.items = await m.query(`SELECT a.id_asignacion AS id,o.id_pedido AS "orderId",o.estado AS "orderStatus",d.id_producto AS "productId",p.nombre AS "productName",a.cantidad AS quantity,d.precio_unitario_ctvs AS "unitPriceCents",(a.cantidad::bigint*d.precio_unitario_ctvs)::float8 AS "subtotalCents" FROM asignacion_consumo a JOIN detalle_pedido d ON d.id_detalle=a.id_detalle JOIN producto p ON p.id_producto=d.id_producto JOIN version_pedido v ON v.id_version=d.id_version JOIN pedido o ON o.id_pedido=v.id_pedido WHERE a.id_cuenta=$1 AND a.estado='active' ORDER BY o.enviado_en,o.id_pedido,d.id_producto`,[id]);
     account.totalCents = account.items.reduce((sum:number, item:{subtotalCents:number})=>sum+item.subtotalCents,0); account.currency='USD';
     const [totals]=await m.query(`SELECT COALESCE(sum(CASE WHEN l.resolucion IN ('cash','transfer') THEN d.importe_ctvs ELSE 0 END),0)::float8 AS paid,COALESCE(sum(d.importe_ctvs),0)::float8 AS resolved FROM detalle_liquidacion d JOIN liquidacion l ON l.id_liquidacion=d.id_liquidacion WHERE l.id_cuenta=$1 AND l.estado='settled' AND d.vigente`,[id]);
+    account.productsCents=account.totalCents;
+    const [shipping]=await m.query(`SELECT COALESCE(sum(envio_ctvs),0)::float8 AS fee,COALESCE(sum(CASE WHEN estado='settled' THEN envio_ctvs ELSE 0 END),0)::float8 AS paid FROM liquidacion WHERE id_cuenta=$1 AND estado<>'cancelled'`,[id]);
+    account.shippingCents=shipping.fee; account.totalCents+=shipping.fee; totals.paid+=shipping.paid; totals.resolved+=shipping.paid;
     account.paidCents=totals.paid; account.pendingCents=account.totalCents-totals.resolved;
     const [pending] = await m.query(`SELECT id_liquidacion AS id,estado AS status,total_ctvs::float8 AS "totalCents" FROM liquidacion WHERE id_cuenta=$1 AND estado='pending'`,[id]);
     account.pendingSettlement=pending ?? null; return account;
@@ -36,10 +39,10 @@ export class SettlementsService {
 
   async accounts(query:AccountListDto, clientId?:string) {
     const admin=query as AdminAccountListDto;
-    const args=[clientId ?? null,query.status ?? null,admin.operatingDayId ?? null,admin.visitId ?? null];
-    const from=`FROM cuenta_consumo c JOIN participante p ON p.id_participante=c.id_participante WHERE ($1::uuid IS NULL OR c.id_cliente=$1) AND ($2::text IS NULL OR c.estado=$2) AND ($3::uuid IS NULL OR c.id_jornada=$3) AND ($4::uuid IS NULL OR p.id_visita=$4)`;
+    const args=[clientId ?? null,query.status ?? null,admin.operatingDayId ?? null,admin.visitId ?? null,query.modality ?? null];
+    const from=`FROM cuenta_consumo c LEFT JOIN participante p ON p.id_participante=c.id_participante WHERE ($1::uuid IS NULL OR c.id_cliente=$1) AND ($2::text IS NULL OR c.estado=$2) AND ($3::uuid IS NULL OR c.id_jornada=$3) AND ($4::uuid IS NULL OR p.id_visita=$4) AND ($5::text IS NULL OR c.modalidad=$5)`;
     const [{total}]=await this.db.query(`SELECT count(*)::int AS total ${from}`,args);
-    const rows:Array<{id:string}>=await this.db.query(`SELECT c.id_cuenta AS id ${from} ORDER BY c.creada_en DESC,c.id_cuenta DESC LIMIT $5 OFFSET $6`,[...args,query.limit,(query.page-1)*query.limit]);
+    const rows:Array<{id:string}>=await this.db.query(`SELECT c.id_cuenta AS id ${from} ORDER BY c.creada_en DESC,c.id_cuenta DESC LIMIT $6 OFFSET $7`,[...args,query.limit,(query.page-1)*query.limit]);
     return {items:await Promise.all(rows.map(row=>this.account(row.id,clientId))),total,page:query.page,limit:query.limit};
   }
 
@@ -56,8 +59,9 @@ export class SettlementsService {
       const zone=await lockTableOperations(m);
       const [day]=await m.query(`SELECT j.id_jornada AS id,c.id_caja AS cash FROM jornada_operativa j JOIN caja c ON c.id_jornada=j.id_jornada WHERE j.fecha_operativa=timezone($1,clock_timestamp())::date AND j.estado='open' AND c.estado='open' FOR UPDATE OF j,c`,[zone]);
       if (!day) throw new ConflictException('Se requiere jornada y caja actuales abiertas.');
-      const [account]=await m.query('SELECT estado FROM cuenta_consumo WHERE id_cuenta=$1 FOR UPDATE',[accountId]);
+      const [account]=await m.query('SELECT estado,modalidad FROM cuenta_consumo WHERE id_cuenta=$1 FOR UPDATE',[accountId]);
       if (!account) throw new NotFoundException('Cuenta no encontrada.');
+      if (account.modalidad==='delivery') throw new ConflictException('La liquidación del domicilio se genera con su pedido.');
       if (account.estado!=='open') throw new ConflictException('La cuenta está cerrada.');
       const [existing]=await m.query(`SELECT 1 FROM liquidacion WHERE id_cuenta=$1 AND estado='pending'`,[accountId]);
       if (existing) throw new ConflictException('La cuenta ya tiene una liquidación pendiente.');
@@ -79,7 +83,8 @@ export class SettlementsService {
       await lockTableOperations(m);
       const [ref]=await m.query('SELECT id_cuenta FROM liquidacion WHERE id_liquidacion=$1',[id]);
       if (!ref) throw new NotFoundException('Liquidación no encontrada.');
-      await m.query('SELECT 1 FROM cuenta_consumo WHERE id_cuenta=$1 FOR UPDATE',[ref.id_cuenta]);
+      const [account]=await m.query('SELECT modalidad FROM cuenta_consumo WHERE id_cuenta=$1 FOR UPDATE',[ref.id_cuenta]);
+      if (account.modalidad==='delivery') throw new ConflictException('Debe anularse el pedido de domicilio.');
       const [row]=await m.query('SELECT estado FROM liquidacion WHERE id_liquidacion=$1 FOR UPDATE',[id]);
       if (row.estado!=='pending') throw new ConflictException('La liquidación ya fue anulada.');
       const [pendingTransfer]=await m.query(`SELECT 1 FROM pago WHERE id_liquidacion=$1 AND metodo='transfer' AND estado='pendingVerification'`,[id]);

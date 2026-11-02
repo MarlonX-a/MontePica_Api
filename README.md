@@ -375,3 +375,33 @@ npm run test:e2e
 GitHub Actions ejecuta estas comprobaciones en cada push y pull request hacia `main`, usando Node.js 24: compilacion, lint, pruebas de login, permisos, administracion, catalogo y configuracion, ademas de las pruebas E2E de salud y contratos de la API.
 
 Las pruebas de los endpoints de estado usan una conexión simulada para comprobar la respuesta HTTP y el documento OpenAPI sin depender de credenciales locales. Para comprobar PostgreSQL real, configura `.env`, inicia la API y consulta `/api/v1/health/ready`.
+
+
+## Etapa 8B: pedido a domicilio con transferencia anticipada
+
+Aplicar las migraciones por separado, después de revisar la base de destino. La implementación y las pruebas no aplican migraciones en MontePica. Se requiere PostgreSQL local, jornada y caja actuales abiertas y `TRANSFER_PAYMENTS_ENABLED=true`; para cargar comprobantes también debe estar disponible el almacenamiento privado.
+
+Recorrido en Swagger, alternando los tokens del personal y del cliente registrado:
+
+1. Configurar domicilios y aprobar una solicitud de cobertura mediante el flujo 8A.
+2. Como cliente, llamar `POST /api/v1/me/delivery-requests/{id}/orders` con `Idempotency-Key` y cuerpo `{"items":[{"productId":"UUID","quantity":1}],"notes":"Observacion"}`. La API calcula precios y tarifa, reserva inventario y crea cuenta y liquidación. Una solicitud admite un solo pedido, incluso si después se anula.
+3. Consultar pedido, cuenta y liquidación mediante las rutas propias existentes. Los detalles incluyen productos, envío y total; las cuentas muestran pagado y pendiente. Los listados de pedidos y cuentas admiten `modality=local|delivery`. Las direcciones se exponen solamente en el detalle del pedido.
+4. Enviar el comprobante con `POST /api/v1/me/settlements/{settlementId}/transfer-payments`, multipart `file`, y una clave idempotente. El personal descarga y confirma o rechaza mediante las rutas de 7C. Un rechazo permite otro intento; un comprobante pendiente no reduce la deuda.
+5. Confirmar la transferencia resuelve la liquidación, pero mantiene abierta la cuenta del domicilio. Como personal, ejecutar `POST /api/v1/admin/orders/{id}/start-preparation` y después `/ready`, con `{ "expectedVersion": 1 }` y claves idempotentes diferentes. La preparación consume las reservas una sola vez y exige pago confirmado y jornada actual abierta.
+
+Los domicilios no admiten edición, efectivo, cierre sin pago ni entrega mediante el endpoint local. El despacho y la entrega se incorporarán en 8C. El personal puede anular un pedido `submitted` con versión y motivo si no tiene pagos confirmados ni transferencias pendientes: se liberan reservas, se anula la liquidación y se cierra la cuenta en una transacción. No se permite anular directamente su liquidación. Si la caja dejó de ser válida, anular el pedido sin pagar y solicitar cobertura nuevamente. Las reservas no vencen automáticamente.
+
+La migración `DeliveryOrders1794300000000` conserva las migraciones anteriores y rechaza su reversión si existen datos incompatibles. Las pruebas PostgreSQL aisladas comprueban subida/reversión/subida y el flujo de domicilio con almacenamiento simulado.
+
+
+## Etapa 8C: despacho, entrega y vencimiento
+
+La configuracion versionada de domicilios admite `receiptSubmissionSeconds`, entero de 60 a 86400, con valor inicial 900. Se guarda `delivery.receiptSubmissionDeadline` en cada nuevo pedido; modificar la configuracion no cambia plazos existentes. Los pedidos anteriores conservan un plazo nulo y no vencen automaticamente.
+
+Despues de confirmar la transferencia y preparar el domicilio, el personal con `orders.manage` marca listo y ejecuta `POST /api/v1/admin/orders/{id}/dispatch`, seguido de `POST /api/v1/admin/orders/{id}/deliver`. Ambas rutas reciben `{ "expectedVersion": 1 }` y requieren claves `Idempotency-Key` distintas. El despacho exige pago confirmado, pedido listo y cuenta abierta. La entrega exige despacho previo y cierra la cuenta sin modificar inventario ni cobros. Se permiten estas dos operaciones en jornadas anteriores. El flujo local mantiene su entrega desde listo.
+
+La carga de comprobantes comprueba el plazo con la hora de PostgreSQL antes de escribir en almacenamiento. Al vencer, un intento pendiente de revision conserva el pedido y las reservas. Confirmar ese intento conserva el flujo de pago; rechazarlo despues del vencimiento anula el pedido en la misma transaccion. Rechazarlo antes permite reintentar hasta el plazo original.
+
+Una tarea se ejecuta al arrancar la API y cada 60 segundos. Resuelve pedidos enviados con plazo vencido y sin pago confirmado ni intento pendiente, libera reservas, anula la liquidacion y cierra la cuenta, con historial y auditoria de sistema. Cada pedido usa su propia transaccion y el bloqueo operativo PostgreSQL compartido por las instancias. Los fallos se registran y se reintentan en la siguiente ejecucion; los vencimientos acumulados durante una parada se procesan al arrancar. La API bloquea comprobantes tardios inmediatamente, aunque la liberacion de existencias espere al siguiente ciclo.
+
+La migracion `DeliveryFulfillment1794400000000` se prueba en una base temporal y rechaza su reversion si hay datos incompatibles. No se aplica automaticamente a MontePica. Los endpoints y filtros muestran `dispatched`, fechas de despacho y entrega y el plazo del comprobante; los listados siguen omitiendo direcciones. No se incluyen repartidores, GPS, entregas fallidas ni devoluciones.
