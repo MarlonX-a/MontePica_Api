@@ -35,6 +35,7 @@ import { ExecuteRefunds1794600000000 } from '../src/database/migrations/17946000
 import { PointsProgram1794700000000 } from '../src/database/migrations/1794700000000-PointsProgram.js';
 import { LocalRewards1794800000000 } from '../src/database/migrations/1794800000000-LocalRewards.js';
 import { CashRegisterClosures1794900000000 } from '../src/database/migrations/1794900000000-CashRegisterClosures.js';
+import { OperatingDayClosures1795000000000 } from '../src/database/migrations/1795000000000-OperatingDayClosures.js';
 import { DeliveryFulfillment1794400000000 } from '../src/database/migrations/1794400000000-DeliveryFulfillment.js';
 import { DeliveryExpiryService } from '../src/tables/delivery-expiry.service.js';
 import { RewardsService } from '../src/rewards/rewards.service.js';
@@ -108,6 +109,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           PointsProgram1794700000000,
           LocalRewards1794800000000,
           CashRegisterClosures1794900000000,
+          OperatingDayClosures1795000000000,
         ],
       });
       await db.initialize();
@@ -165,13 +167,11 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           `INSERT INTO sesion_usuario (id_usuario,refresh_hash,expira_en) VALUES ($1,$2,now()+interval '1 day') RETURNING id_sesion_usuario`,
           [user.id_usuario, hashAccessSecret(randomUUID())],
         );
-        tokens[role] = await app
-          .get(JwtService)
-          .signAsync({
-            sub: user.id_usuario,
-            sid: session.id_sesion_usuario,
-            av: 0,
-          });
+        tokens[role] = await app.get(JwtService).signAsync({
+          sub: user.id_usuario,
+          sid: session.id_sesion_usuario,
+          av: 0,
+        });
       }
       const [day] = await db.query(
         `INSERT INTO jornada_operativa (fecha_operativa,abierta_por)
@@ -890,13 +890,11 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         `INSERT INTO sesion_usuario(id_usuario,refresh_hash,expira_en) VALUES ($1,$2,now()+interval '1 day') RETURNING id_sesion_usuario`,
         [otherUser.id_usuario, hashAccessSecret(randomUUID())],
       );
-      const otherToken = await app
-        .get(JwtService)
-        .signAsync({
-          sub: otherUser.id_usuario,
-          sid: otherSession.id_sesion_usuario,
-          av: 0,
-        });
+      const otherToken = await app.get(JwtService).signAsync({
+        sub: otherUser.id_usuario,
+        sid: otherSession.id_sesion_usuario,
+        av: 0,
+      });
       await request(http())
         .get(`/api/v1/me/delivery-requests/${created.body.id}`)
         .set('Authorization', auth(otherToken))
@@ -1254,11 +1252,6 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           db.query('UPDATE mesa SET activa=false WHERE id_mesa=$1', [table.id]),
         () =>
           db.query(
-            `UPDATE jornada_operativa SET estado='closed' WHERE id_jornada=$1`,
-            [dayId],
-          ),
-        () =>
-          db.query(
             `UPDATE jornada_operativa SET fecha_operativa=fecha_operativa-1 WHERE id_jornada=$1`,
             [dayId],
           ),
@@ -1279,7 +1272,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
             table.id,
           ]);
           await db.query(
-            `UPDATE jornada_operativa SET estado='open',fecha_operativa=timezone('America/Guayaquil',clock_timestamp())::date WHERE id_jornada=$1`,
+            `UPDATE jornada_operativa SET fecha_operativa=timezone('America/Guayaquil',clock_timestamp())::date WHERE id_jornada=$1`,
             [dayId],
           );
         }
@@ -1837,6 +1830,21 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       ).toBe(true);
       expect(
         docs.body.paths['/api/v1/admin/operations/cash/{id}/closure'].get,
+      ).toBeDefined();
+      expect(
+        docs.body.paths['/api/v1/admin/operations/days/{id}/closing-preview']
+          .get,
+      ).toBeDefined();
+      expect(
+        docs.body.paths[
+          '/api/v1/admin/operations/days/{id}/close'
+        ].post.parameters.some(
+          (p: { name: string }) => p.name === 'Idempotency-Key',
+        ),
+      ).toBe(true);
+      expect(
+        docs.body.paths['/api/v1/admin/operations/days/open-with-pending-days']
+          .post,
       ).toBeDefined();
       expect(docs.body.paths['/api/v1/me/refunds/{id}'].get.security).toEqual([
         { 'client-token': [] },
@@ -3354,10 +3362,6 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       await db.query(`UPDATE caja SET estado='closed' WHERE id_caja=$1`, [
         cash.id_caja,
       ]);
-      await db.query(
-        `UPDATE jornada_operativa SET estado='closed' WHERE id_jornada=$1`,
-        [dayId],
-      );
       try {
         await execute(pendingId, '9b-closed-cash').expect(409);
         const transfer = await request(http())
@@ -3377,10 +3381,6 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         await db.query(`UPDATE caja SET estado='open' WHERE id_caja=$1`, [
           cash.id_caja,
         ]);
-        await db.query(
-          `UPDATE jornada_operativa SET estado='open' WHERE id_jornada=$1`,
-          [dayId],
-        );
       }
     });
 
@@ -4130,6 +4130,488 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
             reason: null,
           }),
         );
+    });
+
+    it('closes an old cashless day, finalizes its visit, releases access and cancels unused delivery coverage', async () => {
+      const [day] = await db.query(
+        `INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES('2020-02-03',$1) RETURNING id_jornada id`,
+        [users.admin],
+      );
+      const [table] = await db.query(
+        `INSERT INTO mesa(codigo,qr_hash,qr_version) VALUES($1,$2,1) RETURNING id_mesa id`,
+        [`11B-${randomUUID()}`, hashAccessSecret(randomUUID())],
+      );
+      const [visit] = await db.query(
+        `INSERT INTO visita_mesa(id_mesa,id_jornada,abierta_por) VALUES($1,$2,$3) RETURNING id_visita id`,
+        [table.id, day.id, users.admin],
+      );
+      const createClient = async (suffix: string) => {
+        const [user] = await db.query(
+          `INSERT INTO usuario(id_rol,correo_normalizado,password_hash) SELECT id_rol,$1,'unused' FROM rol WHERE codigo='client' RETURNING id_usuario id`,
+          [`11b-${suffix}-${randomUUID()}@test.invalid`],
+        );
+        await db.query(`INSERT INTO perfil(id_usuario,nombres) VALUES($1,$2)`, [
+          user.id,
+          suffix,
+        ]);
+        const [client] = await db.query(
+          `INSERT INTO cliente(id_usuario) VALUES($1) RETURNING id_cliente id`,
+          [user.id],
+        );
+        return client.id as string;
+      };
+      const approvedClient = await createClient('approved');
+      const pendingClient = await createClient('pending');
+      await db.query(
+        `INSERT INTO participante(id_visita,id_cliente,alias,estado,qr_version_aprobada,aprobada_por,aprobada_en) VALUES($1,$2,'Mesa','approved',1,$3,now())`,
+        [visit.id, approvedClient, users.admin],
+      );
+      const [participant] = await db.query(
+        `SELECT id_participante id FROM participante WHERE id_visita=$1 AND id_cliente=$2`,
+        [visit.id, approvedClient],
+      );
+      const [account] = await db.query(
+        `INSERT INTO cuenta_consumo(id_cliente,id_participante,id_jornada) VALUES($1,$2,$3) RETURNING id_cuenta id`,
+        [approvedClient, participant.id, day.id],
+      );
+      await db.query(
+        `INSERT INTO participante(id_visita,id_cliente,alias,estado) VALUES($1,$2,'Pendiente','pending')`,
+        [visit.id, pendingClient],
+      );
+      const [pendingVisit] = await db.query(
+        `SELECT id_participante id FROM participante WHERE id_visita=$1 AND id_cliente=$2`,
+        [visit.id, pendingClient],
+      );
+      const [config] = await db.query(
+        `SELECT id_configuracion id FROM config_domicilio ORDER BY version DESC LIMIT 1`,
+      );
+      const [pendingRequest] = await db.query(
+        `INSERT INTO solicitud_domicilio(id_cliente,id_jornada,id_configuracion,destinatario,telefono,direccion,tarifa_ctvs,estado) VALUES($1,$2,$3,'Pendiente','0990000000','Dirección de prueba',0,'pending') RETURNING id_solicitud id`,
+        [pendingClient, day.id, config.id],
+      );
+      const [approvedRequest] = await db.query(
+        `INSERT INTO solicitud_domicilio(id_cliente,id_jornada,id_configuracion,destinatario,telefono,direccion,tarifa_ctvs,estado,decidida_en,decidida_por) VALUES($1,$2,$3,'Aprobada','0990000001','Otra dirección',0,'approved',now(),$4) RETURNING id_solicitud id`,
+        [approvedClient, day.id, config.id, users.admin],
+      );
+
+      await request(http())
+        .get(`/api/v1/admin/operations/days/${day.id}/closing-preview`)
+        .set('Authorization', auth(tokens.worker))
+        .expect(200)
+        .then((r) => {
+          expect(r.body.canClose).toBe(true);
+          expect(r.body.cleanupActions).toMatchObject({
+            pendingParticipants: 1,
+            approvedParticipants: 1,
+            openVisits: 1,
+            unusedDeliveryRequests: 2,
+          });
+        });
+      await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.worker))
+        .set('Idempotency-Key', '11b-worker-day-close')
+        .send({})
+        .expect(403);
+      const closed = await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-close-old-day')
+        .send({ notes: 'Cierre verificado' })
+        .expect(200);
+      expect(closed.body).toMatchObject({
+        operatingDayId: day.id,
+        notes: 'Cierre verificado',
+      });
+      const replays = await Promise.all([
+        request(http())
+          .post(`/api/v1/admin/operations/days/${day.id}/close`)
+          .set('Authorization', auth(tokens.admin))
+          .set('Idempotency-Key', '11b-close-old-day')
+          .send({ notes: 'Cierre verificado' }),
+        request(http())
+          .post(`/api/v1/admin/operations/days/${day.id}/close`)
+          .set('Authorization', auth(tokens.admin))
+          .set('Idempotency-Key', '11b-close-old-day')
+          .send({ notes: 'Cierre verificado' }),
+      ]);
+      expect(replays.map((response) => response.status)).toEqual([200, 200]);
+      await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-close-old-day')
+        .send({ notes: 'Otra observación' })
+        .expect(409);
+      await request(http())
+        .get(`/api/v1/admin/operations/days/${day.id}/closure`)
+        .set('Authorization', auth(tokens.worker))
+        .expect(200)
+        .then((r) => expect(r.body.id).toBe(closed.body.id));
+      await request(http())
+        .get(`/api/v1/admin/operations/days/${day.id}`)
+        .set('Authorization', auth(tokens.worker))
+        .expect(200)
+        .then((r) =>
+          expect(r.body).toMatchObject({
+            status: 'closed',
+            closureId: closed.body.id,
+            closedBy: users.admin,
+          }),
+        );
+      await request(http())
+        .get('/api/v1/admin/operating-days?status=closed&page=1&limit=100')
+        .set('Authorization', auth(tokens.worker))
+        .expect(200)
+        .then((r) =>
+          expect(
+            r.body.items.find((item: { id: string }) => item.id === day.id),
+          ).toMatchObject({
+            closedBy: users.admin,
+            closureId: closed.body.id,
+          }),
+        );
+      await expect(
+        db.query(
+          `SELECT 1 FROM visita_mesa WHERE id_visita=$1 AND estado='closed'`,
+          [visit.id],
+        ),
+      ).resolves.toHaveLength(1);
+      await expect(
+        db.query(
+          `SELECT 1 FROM participante WHERE id_participante=$1 AND estado='finished'`,
+          [participant.id],
+        ),
+      ).resolves.toHaveLength(1);
+      await expect(
+        db.query(
+          `SELECT 1 FROM participante WHERE id_participante=$1 AND estado='cancelled'`,
+          [pendingVisit.id],
+        ),
+      ).resolves.toHaveLength(1);
+      await expect(
+        db.query(
+          `SELECT 1 FROM cuenta_consumo WHERE id_cuenta=$1 AND estado='closed'`,
+          [account.id],
+        ),
+      ).resolves.toHaveLength(1);
+      await expect(
+        db.query(
+          `SELECT 1 FROM solicitud_domicilio WHERE id_solicitud=ANY($1::uuid[]) AND estado='cancelled'`,
+          [[pendingRequest.id, approvedRequest.id]],
+        ),
+      ).resolves.toHaveLength(2);
+      await expect(
+        db.query(
+          `UPDATE jornada_operativa SET estado='open' WHERE id_jornada=$1`,
+          [day.id],
+        ),
+      ).rejects.toThrow('no puede reabrirse');
+      const runner = db.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      try {
+        await expect(
+          new OperatingDayClosures1795000000000().down(runner),
+        ).rejects.toThrow('existen cierres o aperturas excepcionales');
+      } finally {
+        await runner.rollbackTransaction();
+        await runner.release();
+      }
+    });
+
+    it('allows only the administrator to open the current day with an audited pending-day exception', async () => {
+      const [settings] = await db.query(
+        `SELECT zona_horaria AS zone FROM configuracion_operativa WHERE id_configuracion=1`,
+      );
+      const zones = [
+        'Etc/GMT+12',
+        'Pacific/Pago_Pago',
+        'America/Guayaquil',
+        'Pacific/Kiritimati',
+        'Etc/GMT-12',
+      ];
+      let selectedZone: string | undefined;
+      for (const zone of zones) {
+        const [candidate] = await db.query(
+          `SELECT timezone($1,clock_timestamp())::date::text AS date`,
+          [zone],
+        );
+        const [existing] = await db.query(
+          `SELECT 1 FROM jornada_operativa WHERE fecha_operativa=$1::date`,
+          [candidate.date],
+        );
+        if (!existing) {
+          selectedZone = zone;
+          break;
+        }
+      }
+      expect(selectedZone).toBeDefined();
+      const [previousDate] = await db.query(
+        `SELECT ($1::date-n)::text AS date FROM generate_series(1,1000) AS days(n)
+         WHERE NOT EXISTS(SELECT 1 FROM jornada_operativa j WHERE j.fecha_operativa=($1::date-n)) LIMIT 1`,
+        [
+          (
+            await db.query(
+              `SELECT timezone($1,clock_timestamp())::date::text AS date`,
+              [selectedZone],
+            )
+          )[0].date,
+        ],
+      );
+      const [pendingDay] = await db.query(
+        `INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES($1::date,$2) RETURNING id_jornada id`,
+        [previousDate.date, users.admin],
+      );
+      await request(http())
+        .patch('/api/v1/admin/operations/settings')
+        .set('Authorization', auth(tokens.admin))
+        .send({ timeZone: selectedZone })
+        .expect(200);
+      await request(http())
+        .post('/api/v1/admin/operations/days/open-with-pending-days')
+        .set('Authorization', auth(tokens.worker))
+        .set('Idempotency-Key', '11b-worker-exception')
+        .send({ reason: 'Recuperación excepcional' })
+        .expect(403);
+      const response = await request(http())
+        .post('/api/v1/admin/operations/days/open-with-pending-days')
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-admin-exception')
+        .send({ reason: 'Recuperación de jornada anterior' })
+        .expect(201);
+      await request(http())
+        .post('/api/v1/admin/operations/days/open-with-pending-days')
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-admin-exception')
+        .send({ reason: 'Recuperación de jornada anterior' })
+        .expect(201);
+      await request(http())
+        .post('/api/v1/admin/operations/days/open-with-pending-days')
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-admin-exception-different')
+        .send({ reason: 'Otra razón' })
+        .expect(409);
+      await request(http())
+        .post('/api/v1/admin/operations/days/open')
+        .set('Authorization', auth(tokens.admin))
+        .expect(409);
+      const [opening] = await db.query(
+        `SELECT motivo, jornadas_pendientes FROM apertura_excepcional_jornada WHERE id_jornada=$1`,
+        [response.body.id],
+      );
+      expect(opening.motivo).toBe('Recuperación de jornada anterior');
+      expect(opening.jornadas_pendientes).toContain(pendingDay.id);
+      await request(http())
+        .patch('/api/v1/admin/operations/settings')
+        .set('Authorization', auth(tokens.admin))
+        .send({ timeZone: settings.zone })
+        .expect(200);
+    });
+
+    it('rolls back the day closure, visit cleanup and idempotency record when audit insertion fails', async () => {
+      const [day] = await db.query(
+        `INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES('2020-02-04',$1) RETURNING id_jornada id`,
+        [users.admin],
+      );
+      const [table] = await db.query(
+        `INSERT INTO mesa(codigo,qr_hash,qr_version) VALUES($1,$2,1) RETURNING id_mesa id`,
+        [`RB-${randomUUID()}`, hashAccessSecret(randomUUID())],
+      );
+      const [visit] = await db.query(
+        `INSERT INTO visita_mesa(id_mesa,id_jornada,abierta_por) VALUES($1,$2,$3) RETURNING id_visita id`,
+        [table.id, day.id, users.admin],
+      );
+      await failAudit('operations.day_closed');
+      try {
+        await request(http())
+          .post(`/api/v1/admin/operations/days/${day.id}/close`)
+          .set('Authorization', auth(tokens.admin))
+          .set('Idempotency-Key', '11b-rollback-close')
+          .send({})
+          .expect(500);
+      } finally {
+        await restoreAudit();
+      }
+      const [state] = await db.query(
+        `SELECT j.estado AS day_status,v.estado AS visit_status,c.id_cierre
+         FROM jornada_operativa j JOIN visita_mesa v ON v.id_jornada=j.id_jornada
+         LEFT JOIN cierre_jornada c ON c.id_jornada=j.id_jornada WHERE j.id_jornada=$1 AND v.id_visita=$2`,
+        [day.id, visit.id],
+      );
+      expect(state).toMatchObject({
+        day_status: 'open',
+        visit_status: 'open',
+        id_cierre: null,
+      });
+      await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-rollback-close')
+        .send({})
+        .expect(200);
+    });
+
+    it('blocks a day with an open cash register and links the cash reconciliation to the day closure', async () => {
+      const [day] = await db.query(
+        `INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES('2020-02-05',$1) RETURNING id_jornada id`,
+        [users.admin],
+      );
+      const [cash] = await db.query(
+        `INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES($1,5000,$2) RETURNING id_caja id`,
+        [day.id, users.admin],
+      );
+      const preview = await request(http())
+        .get(`/api/v1/admin/operations/days/${day.id}/closing-preview`)
+        .set('Authorization', auth(tokens.worker))
+        .expect(200);
+      expect(preview.body.canClose).toBe(false);
+      expect(preview.body.counts).toMatchObject({
+        openCash: 1,
+        cashWithoutClosure: 1,
+      });
+      await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-open-cash-day-close')
+        .send({})
+        .expect(409);
+      const cashClosure = await request(http())
+        .post(`/api/v1/admin/operations/cash/${cash.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-close-cash-before-day')
+        .send({ countedCents: 5000 })
+        .expect(200);
+      const dayClosure = await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-close-after-cash')
+        .send({})
+        .expect(200);
+      expect(dayClosure.body.cashClosureId).toBe(cashClosure.body.id);
+    });
+
+    it('reports every pending order, consumption, settlement, transfer, cancellation and reservation as a day blocker', async () => {
+      const [day] = await db.query(
+        `INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES('2020-02-06',$1) RETURNING id_jornada id`,
+        [users.admin],
+      );
+      const [cash] = await db.query(
+        `INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES($1,0,$2) RETURNING id_caja id`,
+        [day.id, users.admin],
+      );
+      const [table] = await db.query(
+        `INSERT INTO mesa(codigo) VALUES($1) RETURNING id_mesa id`,
+        [`B-${randomUUID()}`],
+      );
+      const [visit] = await db.query(
+        `INSERT INTO visita_mesa(id_mesa,id_jornada,abierta_por) VALUES($1,$2,$3) RETURNING id_visita id`,
+        [table.id, day.id, users.admin],
+      );
+      const [clientUser] = await db.query(
+        `INSERT INTO usuario(id_rol,correo_normalizado,password_hash) SELECT id_rol,$1,'unused' FROM rol WHERE codigo='client' RETURNING id_usuario id`,
+        [`11b-block-${randomUUID()}@test.invalid`],
+      );
+      const [client] = await db.query(
+        `INSERT INTO cliente(id_usuario) VALUES($1) RETURNING id_cliente id`,
+        [clientUser.id],
+      );
+      const [participant] = await db.query(
+        `INSERT INTO participante(id_visita,id_cliente,alias,estado,qr_version_aprobada,aprobada_por,aprobada_en) VALUES($1,$2,'Bloqueo','approved',1,$3,now()) RETURNING id_participante id`,
+        [visit.id, client.id, users.admin],
+      );
+      const [account] = await db.query(
+        `INSERT INTO cuenta_consumo(id_cliente,id_participante,id_jornada) VALUES($1,$2,$3) RETURNING id_cuenta id`,
+        [client.id, participant.id, day.id],
+      );
+      const [category] = await db.query(
+        `SELECT id_categoria id FROM categoria ORDER BY id_categoria LIMIT 1`,
+      );
+      const [product] = await db.query(
+        `INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES($1,$2,'Bloqueador',100,true) RETURNING id_producto id`,
+        [category.id, `11b-block-${randomUUID()}`],
+      );
+      const [inventory] = await db.query(
+        `INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,cantidad_reservada,inicializado_por) VALUES($1,$2,1,1,1,$3) RETURNING id_inventario id`,
+        [day.id, product.id, users.admin],
+      );
+      const [order] = await db.query(
+        `INSERT INTO pedido(id_jornada,id_visita,id_cuenta,actor_usuario,modalidad,origen,estado) VALUES($1,$2,$3,$4,'local','client','submitted') RETURNING id_pedido id`,
+        [day.id, visit.id, account.id, users.admin],
+      );
+      const [version] = await db.query(
+        `INSERT INTO version_pedido(id_pedido,numero,estado,total_productos_ctvs) VALUES($1,1,'current',100) RETURNING id_version id`,
+        [order.id],
+      );
+      const [detail] = await db.query(
+        `INSERT INTO detalle_pedido(id_version,id_producto,cantidad,precio_unitario_ctvs,controla_stock_snapshot) VALUES($1,$2,1,100,true) RETURNING id_detalle id`,
+        [version.id, product.id],
+      );
+      const [assignment] = await db.query(
+        `INSERT INTO asignacion_consumo(id_detalle,id_cuenta,cantidad) VALUES($1,$2,1) RETURNING id_asignacion id`,
+        [detail.id, account.id],
+      );
+      await db.query(
+        `INSERT INTO reserva_inventario(id_detalle,id_inventario,cantidad) VALUES($1,$2,1)`,
+        [detail.id, inventory.id],
+      );
+      const [settlement] = await db.query(
+        `INSERT INTO liquidacion(id_cuenta,id_caja,productos_ctvs,envio_ctvs,total_ctvs,creada_por) VALUES($1,$2,100,0,100,$3) RETURNING id_liquidacion id`,
+        [account.id, cash.id, users.admin],
+      );
+      await db.query(
+        `INSERT INTO detalle_liquidacion(id_liquidacion,id_asignacion,cantidad_snapshot,precio_snapshot_ctvs,importe_ctvs) VALUES($1,$2,1,100,100)`,
+        [settlement.id, assignment.id],
+      );
+      await db.query(
+        `INSERT INTO pago(id_liquidacion,metodo,estado,importe_ctvs,registrado_usuario,pagador_cliente) VALUES($1,'transfer','pendingVerification',100,$2,$3)`,
+        [settlement.id, users.admin, client.id],
+      );
+      await db.query(
+        `INSERT INTO solicitud_cancelacion(id_pedido,id_version,estado_pedido,estado,motivo,actor_usuario) VALUES($1,$2,'submitted','pending','Revisión solicitada',$3)`,
+        [order.id, version.id, users.worker],
+      );
+
+      const response = await request(http())
+        .get(
+          `/api/v1/admin/operations/days/${day.id}/closing-preview?page=1&limit=100`,
+        )
+        .set('Authorization', auth(tokens.worker))
+        .expect(200);
+      expect(response.body.canClose).toBe(false);
+      expect(response.body.counts).toMatchObject({
+        openCash: 1,
+        cashWithoutClosure: 1,
+        unfinishedOrders: 1,
+        unsettledConsumption: 1,
+        pendingSettlements: 1,
+        pendingTransfers: 1,
+        pendingCancellations: 1,
+        activeOrderReservations: 1,
+      });
+      expect(
+        new Set(
+          response.body.blockers.map(
+            (blocker: { kind: string }) => blocker.kind,
+          ),
+        ),
+      ).toEqual(
+        new Set([
+          'openCash',
+          'cashWithoutClosure',
+          'unfinishedOrders',
+          'unsettledConsumption',
+          'pendingSettlements',
+          'pendingTransfers',
+          'pendingCancellations',
+          'activeOrderReservations',
+        ]),
+      );
+      await request(http())
+        .post(`/api/v1/admin/operations/days/${day.id}/close`)
+        .set('Authorization', auth(tokens.admin))
+        .set('Idempotency-Key', '11b-all-blockers-close')
+        .send({})
+        .expect(409);
     });
   },
 );

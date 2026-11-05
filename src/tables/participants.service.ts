@@ -327,4 +327,57 @@ export class ParticipantsService {
     if (row)
       throw new ConflictException('La cuenta tiene consumos pendientes.');
   }
+
+  async closeForOperatingDay(
+    manager: EntityManager,
+    dayId: string,
+    actor: TableActor,
+  ) {
+    const visits = await this.persistence.closeOperatingDayFindVisitaMesa(
+      manager,
+      { dayId },
+    );
+    let cancelledParticipants = 0;
+    let finishedParticipants = 0;
+    for (const visit of visits) {
+      await this.rewards.releaseForVisit(manager, visit.id);
+      const participants = await this.persistence.closeFindParticipante(
+        manager,
+        { id: visit.id },
+      );
+      await this.assertAccountsEmpty(manager, 'visit', visit.id);
+      await this.persistence.closeUpdateCuentaConsumo(manager, {
+        id: visit.id,
+      });
+      await this.persistence.closeUpdateParticipante(manager, {
+        id: visit.id,
+      });
+      const [closed] = await this.persistence.closeUpdateVisitaMesa(manager, {
+        id: visit.id,
+        userId: actor.userId,
+      });
+      await this.persistence.closeUpdateMesa(manager, {
+        id_mesa: visit.tableId,
+      });
+      cancelledParticipants += participants.filter(
+        (participant) => participant.status === 'pending',
+      ).length;
+      finishedParticipants += participants.filter(
+        (participant) => participant.status === 'approved',
+      ).length;
+      await auditTableOperation(
+        manager,
+        actor,
+        'visita_mesa',
+        visit.id,
+        'visit.operating_day_closed',
+        { operatingDayId: dayId, participants, visit: closed },
+      );
+    }
+    return {
+      closedVisits: visits.length,
+      cancelledParticipants,
+      finishedParticipants,
+    };
+  }
 }

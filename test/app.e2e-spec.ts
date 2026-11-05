@@ -64,9 +64,18 @@ describe('API foundation (e2e)', () => {
     }
     productQueryBuilder.getManyAndCount.mockResolvedValue([[], 0]);
     productQueryBuilder.getOne.mockResolvedValue(null);
-    authService.register.mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' });
-    authService.login.mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' });
-    authService.refresh.mockResolvedValue({ accessToken: 'new-access', refreshToken: 'new-refresh' });
+    authService.register.mockResolvedValue({
+      accessToken: 'access',
+      refreshToken: 'refresh',
+    });
+    authService.login.mockResolvedValue({
+      accessToken: 'access',
+      refreshToken: 'refresh',
+    });
+    authService.refresh.mockResolvedValue({
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+    });
     authService.logout.mockResolvedValue(undefined);
     const { AppModule } = await import('../src/app.module.js');
     const moduleFixture = await Test.createTestingModule({
@@ -129,7 +138,9 @@ describe('API foundation (e2e)', () => {
   });
 
   it('publishes the status endpoints in the OpenAPI document', async () => {
-    const response = await request(app.getHttpServer()).get('/docs-json').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/docs-json')
+      .expect(200);
     expect(response.body.paths).toHaveProperty('/api/v1/health');
     expect(response.body.paths).toHaveProperty('/api/v1/health/ready');
     expect(response.body.paths).toHaveProperty('/api/v1/categories');
@@ -138,16 +149,47 @@ describe('API foundation (e2e)', () => {
     expect(response.body.paths).toHaveProperty('/api/v1/admin/roles');
     expect(response.body.paths).toHaveProperty('/api/v1/admin/users');
     expect(response.body.paths).toHaveProperty('/api/v1/admin/categories');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/products/{id}/visibility');
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/products/{id}/visibility',
+    );
     expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/initialize');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/movements');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/{productId}');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/{productId}/movements');
-    expect(response.body.paths).toHaveProperty('/api/v1/admin/operating-days/{dayId}/inventory/{productId}/adjustments');
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operating-days/{dayId}/inventory',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operating-days/{dayId}/inventory/initialize',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operating-days/{dayId}/inventory/movements',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operating-days/{dayId}/inventory/{productId}',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operating-days/{dayId}/inventory/{productId}/movements',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operating-days/{dayId}/inventory/{productId}/adjustments',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operations/days/{id}',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operations/days/{id}/closing-preview',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operations/days/{id}/close',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operations/days/{id}/closure',
+    );
+    expect(response.body.paths).toHaveProperty(
+      '/api/v1/admin/operations/days/open-with-pending-days',
+    );
     expect(response.body.paths).toHaveProperty('/api/v1/auth/change-password');
-    expect(response.body.components.schemas.CreateAdminUserDto.properties).toHaveProperty('initialPassword');
+    expect(
+      response.body.components.schemas.CreateAdminUserDto.properties,
+    ).toHaveProperty('initialPassword');
     expect(response.body.components.schemas.VisibilityDto.properties).toEqual({
       visibleInMenu: expect.objectContaining({ type: 'boolean' }),
     });
@@ -174,7 +216,9 @@ describe('API foundation (e2e)', () => {
   });
 
   it('publishes auth routes and requires a bearer token for the current user', async () => {
-    const response = await request(app.getHttpServer()).get('/docs-json').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/docs-json')
+      .expect(200);
     expect(response.body.paths).toHaveProperty('/api/v1/auth/register');
     expect(response.body.paths).toHaveProperty('/api/v1/auth/login');
     expect(response.body.paths).toHaveProperty('/api/v1/auth/refresh');
@@ -184,10 +228,16 @@ describe('API foundation (e2e)', () => {
     ]);
 
     await request(app.getHttpServer()).get('/api/v1/auth/me').expect(401);
-    await request(app.getHttpServer()).get('/api/v1/admin/products').expect(401);
-    await request(app.getHttpServer()).get('/api/v1/admin/operating-days').expect(401);
     await request(app.getHttpServer())
-      .post('/api/v1/admin/operating-days/22222222-2222-4222-8222-222222222222/inventory/initialize')
+      .get('/api/v1/admin/products')
+      .expect(401);
+    await request(app.getHttpServer())
+      .get('/api/v1/admin/operating-days')
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(
+        '/api/v1/admin/operating-days/22222222-2222-4222-8222-222222222222/inventory/initialize',
+      )
       .send({ items: [] })
       .expect(401);
   });

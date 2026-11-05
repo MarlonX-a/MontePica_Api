@@ -11,6 +11,8 @@ import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { AuditRepository } from '../database/repositories/audit.repository.js';
 import { RewardsService } from '../rewards/rewards.service.js';
 import { ParticipationIdempotencyService } from '../tables/participation-idempotency.service.js';
+import { ParticipantsService } from '../tables/participants.service.js';
+import { DeliveryService } from '../tables/delivery.service.js';
 import { lockTableOperations } from '../tables/table-operations.js';
 import type {
   CashClosingPreviewQueryDto,
@@ -20,6 +22,12 @@ import type {
 import { OpenCashRegisterDto } from './dto/open-cash-register.dto.js';
 import { UpdateOperationsSettingsDto } from './dto/update-operations-settings.dto.js';
 import { OperationsRepository } from './repositories/operations.repository.js';
+import { OperatingDaysRepository } from './repositories/operating-days.repository.js';
+import type {
+  CloseOperatingDayDto,
+  OperatingDayPreviewQueryDto,
+  OpenWithPendingDaysDto,
+} from './dto/operating-day.dto.js';
 
 type SettingsRow = {
   id: number;
@@ -36,8 +44,11 @@ export class OperationsService {
     private readonly dataSource: DataSource,
     private readonly idempotency: ParticipationIdempotencyService,
     private readonly rewards: RewardsService,
+    private readonly participants: ParticipantsService,
+    private readonly delivery: DeliveryService,
     private readonly persistence: OperationsRepository = new OperationsRepository(),
     private readonly auditRecords: AuditRepository = new AuditRepository(),
+    private readonly operatingDays: OperatingDaysRepository = new OperatingDaysRepository(),
   ) {}
 
   async getSettings() {
@@ -412,6 +423,14 @@ export class OperationsService {
       return await this.dataSource.transaction(async (manager) => {
         await this.lockOperations(manager);
         const settings = await this.getSettingsWith(manager);
+        const pendingDays = await this.operatingDays.findOpenDayIds(
+          manager,
+          settings.timeZone,
+        );
+        if (pendingDays.length)
+          throw new ConflictException(
+            'Cierra las jornadas anteriores antes de abrir la jornada actual.',
+          );
         const rows = await this.persistence.openDayInsertJornadaOperativa(
           manager,
           { timeZone: settings.timeZone, userId: actor.userId },
@@ -434,6 +453,235 @@ export class OperationsService {
       );
       throw error;
     }
+  }
+
+  async openWithPendingDays(
+    dto: OpenWithPendingDaysDto,
+    actor: AuthenticatedRequestContext,
+    key?: string,
+  ) {
+    return this.idempotency.run(
+      { userId: actor.userId },
+      'admin/operations/days/open-with-pending-days',
+      key,
+      dto,
+      201,
+      'jornada_operativa',
+      (manager) => this.authorizeOperatingAction(manager, actor, 'exception'),
+      async (manager) => {
+        await this.lockOperations(manager);
+        const settings = await this.getSettingsWith(manager);
+        const pendingDays = await this.operatingDays.findOpenDayIds(
+          manager,
+          settings.timeZone,
+        );
+        if (!pendingDays.length)
+          throw new ConflictException(
+            'No existen jornadas anteriores abiertas que requieran recuperación.',
+          );
+        const current = await this.operatingDays.findCurrentDay(
+          manager,
+          settings.timeZone,
+        );
+        if (current.length)
+          throw new ConflictException(
+            'Ya existe una jornada para la fecha operativa actual.',
+          );
+        const day = await this.operatingDays.insertExceptionOpening(manager, {
+          timeZone: settings.timeZone,
+          userId: actor.userId,
+          reason: dto.reason,
+          previousDayIds: pendingDays.map((item) => item.id),
+        });
+        await this.auditRecords.append(
+          manager,
+          { userId: actor.userId },
+          'jornada_operativa',
+          day.id,
+          'operations.day_opened_with_pending_days',
+          {
+            reason: dto.reason,
+            pendingOperatingDays: pendingDays,
+          },
+        );
+        return {
+          resourceId: day.id,
+          response: {
+            ...day,
+            exceptionalOpening: {
+              reason: dto.reason,
+              pendingOperatingDayIds: pendingDays.map((item) => item.id),
+            },
+          },
+        };
+      },
+    );
+  }
+
+  async getOperatingDay(id: string) {
+    const day = await this.operatingDays.findDay(this.dataSource.manager, id);
+    if (!day) throw new NotFoundException('Jornada no encontrada.');
+    return day;
+  }
+
+  async getOperatingDayClosure(id: string) {
+    const day = await this.operatingDays.findDay(this.dataSource.manager, id);
+    if (!day) throw new NotFoundException('Jornada no encontrada.');
+    const closure = await this.operatingDays.findClosure(
+      this.dataSource.manager,
+      id,
+    );
+    if (!closure)
+      throw new NotFoundException('La jornada todavía no tiene cierre.');
+    return { ...closure, currency: 'USD' as const };
+  }
+
+  async getOperatingDayClosingPreview(
+    id: string,
+    query: OperatingDayPreviewQueryDto,
+  ) {
+    const day = await this.operatingDays.findDay(this.dataSource.manager, id);
+    if (!day) throw new NotFoundException('Jornada no encontrada.');
+    const [counts, blockers, cleanupActions, pendingRefunds] =
+      await Promise.all([
+        this.operatingDays.blockerCounts(this.dataSource.manager, id),
+        this.operatingDays.blockers(
+          this.dataSource.manager,
+          id,
+          query.page,
+          query.limit,
+        ),
+        this.operatingDays.cleanupCounts(this.dataSource.manager, id),
+        this.pendingOperatingDayRefunds(this.dataSource.manager, id),
+      ]);
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    return {
+      operatingDayId: id,
+      canClose: day.status === 'open' && total === 0,
+      counts,
+      blockers: blockers.items,
+      totalBlockers: blockers.total,
+      page: query.page,
+      limit: query.limit,
+      cleanupActions,
+      pendingRefunds,
+      currency: 'USD' as const,
+    };
+  }
+
+  async closeOperatingDay(
+    id: string,
+    dto: CloseOperatingDayDto,
+    actor: AuthenticatedRequestContext,
+    key?: string,
+  ) {
+    return this.idempotency.run(
+      { userId: actor.userId },
+      `admin/operations/days/${id.toLowerCase()}/close`,
+      key,
+      dto,
+      200,
+      'cierre_jornada',
+      (manager) => this.authorizeOperatingAction(manager, actor, 'close'),
+      async (manager) => {
+        await this.lockOperations(manager);
+        const day = await this.operatingDays.findDayForUpdate(manager, id);
+        if (!day) throw new NotFoundException('Jornada no encontrada.');
+        if (day.status !== 'open')
+          throw new ConflictException('La jornada ya está cerrada.');
+        await this.operatingDays.lockDayResources(manager, id);
+        const blockers = await this.operatingDays.blockers(manager, id, 1, 1);
+        if (blockers.total)
+          throw new ConflictException(
+            'Resuelve los pendientes de la jornada antes de cerrarla.',
+          );
+
+        const before = await this.operatingDays.cleanupCounts(manager, id);
+        await this.rewards.releaseForOperatingDay(manager, id);
+        const visitCleanup = await this.participants.closeForOperatingDay(
+          manager,
+          id,
+          { userId: actor.userId },
+        );
+        const cancelledDeliveryRequests =
+          await this.delivery.cancelUnusedForOperatingDay(manager, id, actor);
+        const pendingRefunds = await this.pendingOperatingDayRefunds(
+          manager,
+          id,
+        );
+        if (await this.operatingDays.assertNoReservations(manager, id))
+          throw new ConflictException(
+            'Quedaron reservas de canje sin resolver; el cierre se revirtió.',
+          );
+
+        const current = await this.operatingDays.findDay(manager, id);
+        const summary: Record<string, number> = {
+          ...before,
+          ...visitCleanup,
+          cancelledDeliveryRequests,
+          pendingRefunds: pendingRefunds.total,
+          pendingRefundAmountCents: pendingRefunds.amountCents,
+        };
+        const closure = await this.operatingDays.insertClosure(manager, {
+          dayId: id,
+          cashClosureId: current?.cashClosureId ?? null,
+          userId: actor.userId,
+          notes: dto.notes ?? null,
+          summary,
+        });
+        await this.operatingDays.closeDay(manager, id);
+        await this.auditRecords.append(
+          manager,
+          { userId: actor.userId },
+          'jornada_operativa',
+          id,
+          'operations.day_closed',
+          { before, summary, closureId: closure.id, notes: dto.notes ?? null },
+        );
+        return {
+          resourceId: closure.id,
+          response: { ...closure, currency: 'USD' as const },
+        };
+      },
+    );
+  }
+
+  private async authorizeOperatingAction(
+    manager: import('typeorm').EntityManager,
+    actor: AuthenticatedRequestContext,
+    action: 'close' | 'exception',
+  ) {
+    if (!actor?.userId || !actor?.sessionId)
+      throw new UnauthorizedException('Sesión no válida.');
+    const row =
+      action === 'close'
+        ? await this.operatingDays.closeDayRole(manager, {
+            userId: actor.userId,
+            sessionId: actor.sessionId,
+          })
+        : await this.operatingDays.exceptionOpeningRole(manager, {
+            userId: actor.userId,
+            sessionId: actor.sessionId,
+          });
+    if (!row || !row.activo || row.revocada_en || !row.valid)
+      throw new UnauthorizedException('Sesión no válida.');
+    if (row.role !== 'admin' || !row.allowed)
+      throw new ForbiddenException(
+        'Solo un administrador puede realizar esta operación.',
+      );
+  }
+
+  private async pendingOperatingDayRefunds(
+    manager: import('typeorm').EntityManager,
+    dayId: string,
+  ) {
+    const row = await this.operatingDays.pendingRefunds(manager, dayId);
+    const amount = BigInt(row.amountCents);
+    if (amount < 0n || amount > BigInt(Number.MAX_SAFE_INTEGER))
+      throw new ConflictException(
+        'Las devoluciones pendientes exceden el rango seguro.',
+      );
+    return { total: row.total, amountCents: Number(amount) };
   }
 
   async openCash(dto: OpenCashRegisterDto, actor: AuthenticatedRequestContext) {

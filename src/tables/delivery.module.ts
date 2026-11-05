@@ -34,5 +34,6 @@ import { ParticipationIdempotencyService } from './participation-idempotency.ser
     DeliveryService,
     OrdersService,
   ],
+  exports: [DeliveryService],
 })
 export class DeliveryModule {}

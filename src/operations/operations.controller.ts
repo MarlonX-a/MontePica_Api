@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiCreatedResponse,
   ApiOperation,
   ApiOkResponse,
   ApiResponse,
@@ -36,6 +37,15 @@ import {
   CloseCashRegisterDto,
   ListCashRegistersDto,
 } from './dto/cash-register.dto.js';
+import {
+  CloseOperatingDayDto,
+  OperatingDayClosureDto,
+  OperatingDayClosingPreviewDto,
+  OperatingDayDetailsDto,
+  OperatingDayPreviewQueryDto,
+  OpenWithPendingDayResponseDto,
+  OpenWithPendingDaysDto,
+} from './dto/operating-day.dto.js';
 
 @ApiTags('Operación diaria')
 @ApiBearerAuth('access-token')
@@ -150,6 +160,89 @@ export class OperationsController {
   })
   openDay(@CurrentUserContext() actor: AuthenticatedRequestContext) {
     return this.operations.openDay(actor);
+  }
+
+  @Get('days/:id')
+  @RequirePermission('operations.read')
+  @ApiOperation({
+    summary: 'Consulta una jornada y su estado de caja y cierre.',
+  })
+  @ApiOkResponse({ type: OperatingDayDetailsDto })
+  @ApiResponse({ status: 404, description: 'Jornada no encontrada.' })
+  getOperatingDay(@Param('id', ParseUUIDPipe) id: string) {
+    return this.operations.getOperatingDay(id);
+  }
+
+  @Get('days/:id/closing-preview')
+  @RequirePermission('operations.read')
+  @ApiOperation({
+    summary: 'Muestra bloqueos y limpiezas previstas para cerrar una jornada.',
+  })
+  @ApiOkResponse({ type: OperatingDayClosingPreviewDto })
+  closingPreviewOperatingDay(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: OperatingDayPreviewQueryDto,
+  ) {
+    return this.operations.getOperatingDayClosingPreview(id, query);
+  }
+
+  @Post('days/:id/close')
+  @HttpCode(200)
+  @RequirePermission('operations.closeDay')
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiOperation({
+    summary:
+      'Resuelve limpiezas pendientes y cierra la jornada de forma inmutable.',
+  })
+  @ApiOkResponse({ type: OperatingDayClosureDto })
+  @ApiResponse({
+    status: 409,
+    description: 'La jornada conserva pendientes o ya fue cerrada.',
+  })
+  closeOperatingDay(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CloseOperatingDayDto,
+    @CurrentUserContext() actor: AuthenticatedRequestContext,
+    @Headers('idempotency-key') key?: string,
+  ) {
+    return this.operations.closeOperatingDay(id, dto, actor, key);
+  }
+
+  @Get('days/:id/closure')
+  @RequirePermission('operations.read')
+  @ApiOperation({
+    summary: 'Consulta el registro histórico de cierre de la jornada.',
+  })
+  @ApiOkResponse({ type: OperatingDayClosureDto })
+  @ApiResponse({
+    status: 404,
+    description: 'La jornada todavía no tiene cierre.',
+  })
+  getOperatingDayClosure(@Param('id', ParseUUIDPipe) id: string) {
+    return this.operations.getOperatingDayClosure(id);
+  }
+
+  @Post('days/open-with-pending-days')
+  @RequirePermission('operations.openWithPendingDays')
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiOperation({
+    summary:
+      'Abre la fecha actual con una justificación para recuperar jornadas previas.',
+  })
+  @ApiCreatedResponse({
+    type: OpenWithPendingDayResponseDto,
+    description: 'Jornada actual abierta con excepción auditada.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'No hay jornadas previas abiertas o ya existe jornada actual.',
+  })
+  openWithPendingDays(
+    @Body() dto: OpenWithPendingDaysDto,
+    @CurrentUserContext() actor: AuthenticatedRequestContext,
+    @Headers('idempotency-key') key?: string,
+  ) {
+    return this.operations.openWithPendingDays(dto, actor, key);
   }
 
   @Post('cash/open')

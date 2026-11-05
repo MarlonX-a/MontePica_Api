@@ -19,6 +19,9 @@ export interface ListOperatingDaysFindJornadaOperativaNextRow {
   status: string;
   openedAt: Date;
   openedBy: string;
+  closedAt: Date | null;
+  closedBy: string | null;
+  closureId: string | null;
 }
 export interface ListInventoryFindProductoRow {
   total: number;
@@ -136,8 +139,9 @@ export class InventoryRepository {
   ): Promise<ListOperatingDaysFindJornadaOperativaNextRow[]> {
     return manager.query<ListOperatingDaysFindJornadaOperativaNextRow[]>(
       `SELECT j."id_jornada" AS id, j."fecha_operativa" AS "businessDate", j."estado" AS status,
-          j."abierta_en" AS "openedAt", j."abierta_por" AS "openedBy"
-       FROM "jornada_operativa" j ${fragment0}
+          j."abierta_en" AS "openedAt", j."abierta_por" AS "openedBy",
+          c."cerrado_en" AS "closedAt",c."cerrado_por" AS "closedBy",c.id_cierre AS "closureId"
+       FROM "jornada_operativa" j LEFT JOIN cierre_jornada c ON c.id_jornada=j.id_jornada ${fragment0}
        ORDER BY j."fecha_operativa" DESC, j."id_jornada" DESC
        OFFSET ${fragment1} LIMIT ${fragment2}`,
       parameters,

@@ -9,6 +9,7 @@ import { IdempotencyRepository } from './repositories/idempotency.repository.js'
 import { OperationalLockRepository } from './repositories/operational-lock.repository.js';
 import { InventoryRepository } from '../inventory/repositories/inventory.repository.js';
 import { OperationsRepository } from '../operations/repositories/operations.repository.js';
+import { OperatingDaysRepository } from '../operations/repositories/operating-days.repository.js';
 import { PointsRepository } from '../points/repositories/points.repository.js';
 import { RewardsRepository } from '../rewards/repositories/rewards.repository.js';
 import { CancellationsRepository } from '../tables/repositories/cancellations.repository.js';
@@ -36,6 +37,7 @@ const repositories = [
   OperationalLockRepository,
   InventoryRepository,
   OperationsRepository,
+  OperatingDaysRepository,
   PointsRepository,
   RewardsRepository,
   CancellationsRepository,

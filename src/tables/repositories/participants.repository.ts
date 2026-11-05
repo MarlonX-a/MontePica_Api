@@ -157,10 +157,24 @@ export interface CloseUpdateVisitaMesaRow {
   status: string;
   closedAt: Date;
 }
+export interface CloseOperatingDayFindVisitaMesaRow {
+  id: string;
+  tableId: string;
+}
 export interface AssertAccountsEmptyFindParticipanteRow {
   '1': string;
 }
 export class ParticipantsRepository {
+  async closeOperatingDayFindVisitaMesa(
+    manager: EntityManager,
+    input: { dayId: string },
+  ): Promise<CloseOperatingDayFindVisitaMesaRow[]> {
+    return manager.query<CloseOperatingDayFindVisitaMesaRow[]>(
+      `SELECT v.id_visita AS id,v.id_mesa AS "tableId" FROM visita_mesa v
+       WHERE v.id_jornada=$1 AND v.estado='open' ORDER BY v.id_mesa,v.id_visita`,
+      [input.dayId],
+    );
+  }
   async authenticateFindSesionCliente(
     manager: EntityManager,
     input: { guestSessionId: string; clientId: string },

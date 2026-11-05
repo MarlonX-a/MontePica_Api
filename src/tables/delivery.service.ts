@@ -265,4 +265,32 @@ export class DeliveryService {
       },
     );
   }
+
+  async cancelUnusedForOperatingDay(
+    manager: EntityManager,
+    dayId: string,
+    actor: AuthenticatedRequestContext,
+  ) {
+    const rows = await this.persistence.cancelUnusedForOperatingDay(
+      manager,
+      dayId,
+      actor.userId,
+    );
+    for (const row of rows) {
+      await auditTableOperation(
+        manager,
+        { userId: actor.userId },
+        'solicitud_domicilio',
+        row.id,
+        'delivery.operating_day_closed',
+        {
+          operatingDayId: dayId,
+          clientId: row.clientId,
+          before: row.oldStatus,
+          after: 'cancelled',
+        },
+      );
+    }
+    return rows.length;
+  }
 }

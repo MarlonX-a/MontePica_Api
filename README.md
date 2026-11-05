@@ -497,6 +497,16 @@ Solo el administrador puede cerrar mediante `POST /api/v1/admin/operations/cash/
 
 El cierre es único e inmutable. Consulta el registro guardado con `GET /api/v1/admin/operations/cash/{id}/closure`; el resumen existente y `GET /api/v1/admin/operations/current` muestran el cierre cuando se trata de la jornada actual. Cerrar caja no cierra la jornada ni las visitas. La migración `CashRegisterClosures1794900000000` se aplica por separado tras revisar el destino; su reversión se detiene si ya existen cierres. Las pruebas usan PostgreSQL temporal y no aplican migraciones a `MontePica`.
 
+## Etapa 11B: resolución de pendientes y cierre de jornada
+
+Consulta jornadas actuales e históricas con `GET /api/v1/admin/operating-days`. El listado incluye fecha, estado y, si ya se cerró, responsable y hora del cierre. Usa `GET /api/v1/admin/operations/days/{id}` para consultar también la caja.
+
+Antes del cierre, `GET /api/v1/admin/operations/days/{id}/closing-preview?page=1&limit=20` devuelve los pendientes que bloquean, sus motivos e identificadores, las limpiezas automáticas previstas y las devoluciones autorizadas todavía pendientes. Resuelve pedidos sin entregar, consumo sin liquidar, liquidaciones pendientes, transferencias en revisión y solicitudes de cancelación pendientes. Una caja debe estar cerrada y conciliada si existe; una jornada sin caja puede cerrarse.
+
+Solo el administrador puede cerrar con `POST /api/v1/admin/operations/days/{id}/close`, `Idempotency-Key` y cuerpo `{ "notes": "Cierre revisado" }` (las observaciones son opcionales, hasta 500 caracteres). En una transacción la API libera canjes pendientes, cancela solicitudes de participación pendientes, finaliza las aprobadas, cierra visitas e invalida sus QR, cancela coberturas sin pedido y guarda un resumen inmutable. Las devoluciones autorizadas pendientes se muestran como información y se pueden ejecutar después; no cambian retroactivamente el cierre. Consulta el registro con `GET /api/v1/admin/operations/days/{id}/closure`.
+
+La apertura normal (`POST /api/v1/admin/operations/days/open`) queda bloqueada si hay jornadas anteriores abiertas. Si deben cobrarse cuentas antiguas, un administrador con `operations.openWithPendingDays` puede abrir la fecha actual con `POST /api/v1/admin/operations/days/open-with-pending-days`, `Idempotency-Key` y `{ "reason": "Recuperación de cuentas pendientes" }`. La excepción guarda el motivo y los identificadores de jornadas pendientes, sin cerrarlas ni modificarlas. Abre luego la caja actual y resuelve las cuentas antiguas con los flujos existentes. Los cierres no se pueden modificar ni reabrir. La migración `OperatingDayClosures1795000000000` es reversible únicamente antes de guardar cierres o aperturas excepcionales.
+
 ## Arquitectura: servicios y repositorios
 
 Los controladores validan contratos HTTP y llaman a servicios. Los servicios aplican reglas del negocio y coordinan transacciones; las consultas, filtros SQL y operaciones del ORM pertenecen a las carpetas `repositories` de cada módulo. El catálogo y la identidad usan entidades existentes de TypeORM; los repositorios de operaciones complejas conservan SQL parametrizado y proyecciones tipadas. No se añaden entidades ni cambios de esquema para esta separación.

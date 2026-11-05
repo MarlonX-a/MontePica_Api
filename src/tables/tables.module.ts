@@ -83,5 +83,6 @@ import { TransfersService } from './transfers.service.js';
     TransfersService,
     CancellationsService,
   ],
+  exports: [ParticipantsService],
 })
 export class TablesModule {}

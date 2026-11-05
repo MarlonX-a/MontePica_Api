@@ -101,6 +101,27 @@ export interface TransitionFindEntregaDomicilioRow {
   '1': string;
 }
 export class DeliveryRepository {
+  async cancelUnusedForOperatingDay(
+    manager: EntityManager,
+    dayId: string,
+    _userId: string,
+  ): Promise<Array<{ id: string; clientId: string; oldStatus: string }>> {
+    return manager.query<
+      Array<{ id: string; clientId: string; oldStatus: string }>
+    >(
+      `WITH targets AS (
+        SELECT s.id_solicitud,s.id_cliente,s.estado FROM solicitud_domicilio s
+        WHERE s.id_jornada=$1 AND s.estado IN ('pending','approved')
+          AND NOT EXISTS(SELECT 1 FROM entrega_domicilio e WHERE e.id_solicitud=s.id_solicitud)
+        ORDER BY s.id_solicitud FOR UPDATE
+       ), changed AS (
+        UPDATE solicitud_domicilio s SET estado='cancelled',cancelada_en=clock_timestamp()
+        FROM targets t WHERE s.id_solicitud=t.id_solicitud
+        RETURNING s.id_solicitud AS id,s.id_cliente AS "clientId",t.estado AS "oldStatus"
+       ) SELECT id,"clientId","oldStatus" FROM changed`,
+      [dayId],
+    );
+  }
   async staffFindUsuario(
     manager: EntityManager,
     input: { userId: string; sessionId: string },
