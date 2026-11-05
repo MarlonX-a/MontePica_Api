@@ -27,16 +27,16 @@ Copy-Item .env.example .env
 
 Edita `.env` con la contraseña elegida y los datos de tu PostgreSQL. El archivo `.env` está excluido de Git. Las variables disponibles son:
 
-| Variable | Uso | Valor local de ejemplo |
-|---|---|---|
-| `NODE_ENV` | Entorno de ejecución | `development` |
-| `PORT` | Puerto HTTP de la API | `3000` |
-| `DB_HOST` | Servidor PostgreSQL | `127.0.0.1` |
-| `DB_PORT` | Puerto PostgreSQL | `5432` |
-| `DB_USERNAME` | Usuario exclusivo de la API | `monte_pica_app` |
-| `DB_PASSWORD` | Contraseña del usuario | La que configuraste |
-| `DB_NAME` | Base de datos de la aplicación | `monte_pica` |
-| `DB_LOGGING` | Consultas SQL en el log | `false` |
+| Variable       | Uso                             | Valor local de ejemplo                         |
+| -------------- | ------------------------------- | ---------------------------------------------- |
+| `NODE_ENV`     | Entorno de ejecución            | `development`                                  |
+| `PORT`         | Puerto HTTP de la API           | `3000`                                         |
+| `DB_HOST`      | Servidor PostgreSQL             | `127.0.0.1`                                    |
+| `DB_PORT`      | Puerto PostgreSQL               | `5432`                                         |
+| `DB_USERNAME`  | Usuario exclusivo de la API     | `monte_pica_app`                               |
+| `DB_PASSWORD`  | Contraseña del usuario          | La que configuraste                            |
+| `DB_NAME`      | Base de datos de la aplicación  | `monte_pica`                                   |
+| `DB_LOGGING`   | Consultas SQL en el log         | `false`                                        |
 | `CORS_ORIGINS` | Orígenes web separados por coma | `http://localhost:8081,http://localhost:19006` |
 
 El proceso valida la configuración al arrancar y muestra qué variable falta o es inválida. CORS queda cerrado para orígenes web que no aparezcan en `CORS_ORIGINS`; las aplicaciones móviles nativas no usan esa política del navegador.
@@ -114,11 +114,11 @@ El comando solicita nombre, correo, teléfono opcional y contraseña dos veces, 
 
 Todas las rutas requieren un token de acceso. Los permisos se comprueban contra PostgreSQL en cada llamada:
 
-| Rol | Permisos administrativos |
-|---|---|
-| `admin` | Usuarios, consulta de roles, catálogo y visibilidad. |
+| Rol      | Permisos administrativos                                      |
+| -------- | ------------------------------------------------------------- |
+| `admin`  | Usuarios, consulta de roles, catálogo y visibilidad.          |
 | `worker` | Consulta administrativa del catálogo y cambio de visibilidad. |
-| `client` | Sin rutas administrativas. |
+| `client` | Sin rutas administrativas.                                    |
 
 - `GET /api/v1/admin/roles`: roles y permisos.
 - `GET /api/v1/admin/users?search=ana&roleCode=worker&active=true&page=1&limit=20`, `GET /users/:id`, `POST /users`, `PATCH /users/:id`.
@@ -150,15 +150,15 @@ Aplica las migraciones pendientes con `npm run migration:run`. El inventario se 
 
 Las rutas requieren JWT y los permisos indicados. El trabajador puede consultar y registrar movimientos ordinarios; solo el administrador puede inicializar productos o corregir saldos por conteo físico.
 
-| Endpoint | Permiso | Uso |
-|---|---|---|
-| `GET /api/v1/admin/operating-days?page=1&limit=20&status=open&fromDate=2026-10-01&toDate=2026-10-31` | `inventory.read` | Listar jornadas, de la más reciente a la más antigua. |
-| `GET /api/v1/admin/operating-days/:dayId/inventory?search=ceviche&categoryId=<uuid>&initialized=false` | `inventory.read` | Listar existencias y productos pendientes. |
-| `GET /api/v1/admin/operating-days/:dayId/inventory/:productId` | `inventory.read` | Consultar un producto en la jornada. |
-| `GET /api/v1/admin/operating-days/:dayId/inventory/movements?productId=<uuid>&type=waste` | `inventory.read` | Consultar movimientos de la jornada. |
-| `POST /api/v1/admin/operating-days/:dayId/inventory/initialize` | `inventory.initialize` | Inicializar productos por lote. |
-| `POST /api/v1/admin/operating-days/:dayId/inventory/:productId/movements` | `inventory.move` | Registrar reposición, consumo interno, obsequio o desperdicio. |
-| `POST /api/v1/admin/operating-days/:dayId/inventory/:productId/adjustments` | `inventory.adjust` | Ajustar con un conteo físico. |
+| Endpoint                                                                                               | Permiso                | Uso                                                            |
+| ------------------------------------------------------------------------------------------------------ | ---------------------- | -------------------------------------------------------------- |
+| `GET /api/v1/admin/operating-days?page=1&limit=20&status=open&fromDate=2026-10-01&toDate=2026-10-31`   | `inventory.read`       | Listar jornadas, de la más reciente a la más antigua.          |
+| `GET /api/v1/admin/operating-days/:dayId/inventory?search=ceviche&categoryId=<uuid>&initialized=false` | `inventory.read`       | Listar existencias y productos pendientes.                     |
+| `GET /api/v1/admin/operating-days/:dayId/inventory/:productId`                                         | `inventory.read`       | Consultar un producto en la jornada.                           |
+| `GET /api/v1/admin/operating-days/:dayId/inventory/movements?productId=<uuid>&type=waste`              | `inventory.read`       | Consultar movimientos de la jornada.                           |
+| `POST /api/v1/admin/operating-days/:dayId/inventory/initialize`                                        | `inventory.initialize` | Inicializar productos por lote.                                |
+| `POST /api/v1/admin/operating-days/:dayId/inventory/:productId/movements`                              | `inventory.move`       | Registrar reposición, consumo interno, obsequio o desperdicio. |
+| `POST /api/v1/admin/operating-days/:dayId/inventory/:productId/adjustments`                            | `inventory.adjust`     | Ajustar con un conteo físico.                                  |
 
 Todas las listas usan `{ items, total, page, limit }`; `page` inicia en 1 y `limit` por defecto es 20, máximo 100. En cada fila se devuelven `initialQuantity`, `physicalQuantity`, `reservedQuantity` y `availableQuantity`. Las unidades reservadas empiezan en cero y no cambian hasta que se implemente la reserva por pedidos.
 
@@ -181,7 +181,11 @@ Content-Type: application/json
 ```
 
 ```json
-{ "type": "waste", "quantity": 2, "reason": "Porciones descartadas por deterioro" }
+{
+  "type": "waste",
+  "quantity": 2,
+  "reason": "Porciones descartadas por deterioro"
+}
 ```
 
 ```json
@@ -196,15 +200,15 @@ Esta entrega permite identificar al cliente y resolver el QR de una visita. La E
 
 Usa las migraciones existentes cuando vayas a habilitar esta etapa en tu entorno. No se ejecutan al arrancar y `synchronize` permanece desactivado. Las credenciales del `.env` deben apuntar a la base que quieras usar.
 
-| Endpoint | Identidad o permiso | Respuesta |
-|---|---|---|
-| `POST /api/v1/guest-sessions` | Público, máximo 10 solicitudes/minuto/IP | `201`, `{ client: { id, name, phone }, token, sessionId, expiresAt }` |
-| `DELETE /api/v1/guest-sessions/current` | Bearer `guest_` vigente | `204`; revoca la sesión invitada |
-| `GET /api/v1/admin/tables?page=1&limit=20` | JWT, `tables.read` | Lista paginada de mesas |
-| `POST /api/v1/admin/tables` | JWT, `tables.manage` | Crea mesa con `{ "code": "M01" }` |
-| `POST /api/v1/admin/tables/:id/visits` | JWT, `visits.manage` | `201`, `{ id, status, openedAt }`; invalida QR anterior |
-| `POST /api/v1/admin/visits/:id/qr` | JWT, `visits.manage` | `201`, `{ visitId, qrToken, qrVersion }` |
-| `POST /api/v1/table-access/resolve` | JWT de cliente o Bearer `guest_` | `200`, `{ visitId, tableId, tableCode, qrVersion }` |
+| Endpoint                                   | Identidad o permiso                      | Respuesta                                                             |
+| ------------------------------------------ | ---------------------------------------- | --------------------------------------------------------------------- |
+| `POST /api/v1/guest-sessions`              | Público, máximo 10 solicitudes/minuto/IP | `201`, `{ client: { id, name, phone }, token, sessionId, expiresAt }` |
+| `DELETE /api/v1/guest-sessions/current`    | Bearer `guest_` vigente                  | `204`; revoca la sesión invitada                                      |
+| `GET /api/v1/admin/tables?page=1&limit=20` | JWT, `tables.read`                       | Lista paginada de mesas                                               |
+| `POST /api/v1/admin/tables`                | JWT, `tables.manage`                     | Crea mesa con `{ "code": "M01" }`                                     |
+| `POST /api/v1/admin/tables/:id/visits`     | JWT, `visits.manage`                     | `201`, `{ id, status, openedAt }`; invalida QR anterior               |
+| `POST /api/v1/admin/visits/:id/qr`         | JWT, `visits.manage`                     | `201`, `{ visitId, qrToken, qrVersion }`                              |
+| `POST /api/v1/table-access/resolve`        | JWT de cliente o Bearer `guest_`         | `200`, `{ visitId, tableId, tableCode, qrVersion }`                   |
 
 El trabajador puede listar mesas, abrir visitas y emitir QR. El administrador también puede crear mesas. El cliente registrado y el invitado resuelven el QR; el personal no puede usar esa ruta como cliente (`403`). Los invitados no pueden acceder a administración (`401`).
 
@@ -234,19 +238,19 @@ Remove-Item Env:RUN_POSTGRES_E2E
 
 Un cliente registrado o invitado solicita acceso a una visita con su QR. El personal aprueba la solicitud y la API crea su cuenta individual local. El cliente consulta únicamente sus propias participaciones y su cuenta; el personal consulta los participantes de una visita.
 
-| Endpoint | Acceso | Uso |
-|---|---|---|
-| `POST /api/v1/visits/:id/participants` | Cliente o invitado | Solicitar ingreso con `{ "qrToken": "<token>", "alias": "María" }` |
-| `GET /api/v1/me/participants` y `GET /api/v1/me/participants/:id` | Cliente o invitado | Listar y consultar participaciones propias y su cuenta |
-| `POST /api/v1/me/participants/:id/leave` | Cliente o invitado | Cancelar solicitud pendiente o finalizar participación y cerrar la cuenta |
-| `GET /api/v1/admin/visits` y `GET /api/v1/admin/visits/:id` | `visits.read` | Consultar visitas actuales e históricas |
-| `GET /api/v1/admin/visits/:id/participants` | `participants.manage` | Consultar participantes de una visita |
-| `POST /api/v1/admin/participants/:id/approve` | `participants.manage` | Aprobar solicitud y crear cuenta |
-| `POST /api/v1/admin/participants/:id/reject` | `participants.manage` | Rechazar solicitud con `{ "reason": "Motivo" }` |
-| `POST /api/v1/admin/participants/:id/finish` | `participants.manage` | Finalizar participación aprobada y cerrar su cuenta |
-| `POST /api/v1/admin/visits/:id/close` | `visits.manage` | Cerrar visita, participantes y cuentas |
-| `GET /api/v1/admin/tables/:id` | `tables.read` | Consultar una mesa y su visita abierta |
-| `PATCH /api/v1/admin/tables/:id` | `tables.manage` | Actualizar `{ "code": "M01", "active": true }` |
+| Endpoint                                                          | Acceso                | Uso                                                                       |
+| ----------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------- |
+| `POST /api/v1/visits/:id/participants`                            | Cliente o invitado    | Solicitar ingreso con `{ "qrToken": "<token>", "alias": "María" }`        |
+| `GET /api/v1/me/participants` y `GET /api/v1/me/participants/:id` | Cliente o invitado    | Listar y consultar participaciones propias y su cuenta                    |
+| `POST /api/v1/me/participants/:id/leave`                          | Cliente o invitado    | Cancelar solicitud pendiente o finalizar participación y cerrar la cuenta |
+| `GET /api/v1/admin/visits` y `GET /api/v1/admin/visits/:id`       | `visits.read`         | Consultar visitas actuales e históricas                                   |
+| `GET /api/v1/admin/visits/:id/participants`                       | `participants.manage` | Consultar participantes de una visita                                     |
+| `POST /api/v1/admin/participants/:id/approve`                     | `participants.manage` | Aprobar solicitud y crear cuenta                                          |
+| `POST /api/v1/admin/participants/:id/reject`                      | `participants.manage` | Rechazar solicitud con `{ "reason": "Motivo" }`                           |
+| `POST /api/v1/admin/participants/:id/finish`                      | `participants.manage` | Finalizar participación aprobada y cerrar su cuenta                       |
+| `POST /api/v1/admin/visits/:id/close`                             | `visits.manage`       | Cerrar visita, participantes y cuentas                                    |
+| `GET /api/v1/admin/tables/:id`                                    | `tables.read`         | Consultar una mesa y su visita abierta                                    |
+| `PATCH /api/v1/admin/tables/:id`                                  | `tables.manage`       | Actualizar `{ "code": "M01", "active": true }`                            |
 
 Las listas devuelven `{ items, total, page, limit }`, con página 1 y límite 20 por defecto, máximo 100. Visitas admite `tableId`, `operatingDayId` y `status`; participantes admite `status` (`pending`, `approved`, `rejected`, `cancelled`, `finished`). Las solicitudes, transiciones y cierre de visita requieren `Idempotency-Key` de 1 a 128 caracteres. Repetirla con los mismos datos devuelve la respuesta original; reutilizarla con otros datos devuelve `409`.
 
@@ -261,7 +265,12 @@ Las cuentas están vacías hasta implementar pedidos. La identidad del cliente p
 Un cliente o invitado con participación aprobada puede enviar un pedido para su propia cuenta con `POST /api/v1/visits/:id/orders`, usando el token de cliente y el encabezado `Idempotency-Key`. El cuerpo es, por ejemplo:
 
 ```json
-{ "items": [{ "productId": "UUID-del-producto", "quantity": 2, "notes": "Sin picante" }], "notes": "Para compartir" }
+{
+  "items": [
+    { "productId": "UUID-del-producto", "quantity": 2, "notes": "Sin picante" }
+  ],
+  "notes": "Para compartir"
+}
 ```
 
 Las observaciones son opcionales. La API obtiene los precios del catálogo, guarda los importes históricos y reserva las existencias de productos con inventario. El pedido completo se rechaza si falta stock. Repetir la misma clave y cuerpo devuelve la respuesta original.
@@ -275,7 +284,11 @@ Para probar desde Swagger, aplica la migración en la base de prueba, abre una j
 La configuración `localOrderEditSeconds` se consulta y actualiza en `/api/v1/admin/operations/settings` (0 a 3600 segundos; inicial 300). El plazo se fija al crear el pedido. El cliente consulta `editableUntil` y `canEdit` y puede reemplazar su pedido mediante `PUT /api/v1/me/orders/:id` con `Idempotency-Key` y este cuerpo:
 
 ```json
-{ "expectedVersion": 1, "items": [{ "productId": "UUID-del-producto", "quantity": 2 }], "notes": "Para compartir" }
+{
+  "expectedVersion": 1,
+  "items": [{ "productId": "UUID-del-producto", "quantity": 2 }],
+  "notes": "Para compartir"
+}
 ```
 
 El personal con `orders.manage` usa `POST /api/v1/admin/orders/:id/start-preparation`, `/ready` y `/deliver`, cada uno con `Idempotency-Key` y `{ "expectedVersion": 2 }`. Al comenzar la preparación se consume el inventario reservado. Cliente y personal pueden anular un pedido `submitted` mediante `POST /api/v1/me/orders/:id/cancel` o `POST /api/v1/admin/orders/:id/cancel`, enviando `{ "expectedVersion": 1, "reason": "Motivo" }` y una clave idempotente; la anulación libera las reservas.
@@ -336,7 +349,15 @@ El administrador configura una versión mediante `PUT /api/v1/admin/delivery/set
 Con la jornada abierta, un cliente registrado configura su JWT en `client-token` y envía `POST /api/v1/me/delivery-requests` con `Idempotency-Key`:
 
 ```json
-{ "configurationVersion": 2, "recipientName": "María", "phone": "0987654321", "address": "Calle principal 123", "references": "Casa azul", "latitude": -0.2, "longitude": -80.1 }
+{
+  "configurationVersion": 2,
+  "recipientName": "María",
+  "phone": "0987654321",
+  "address": "Calle principal 123",
+  "references": "Casa azul",
+  "latitude": -0.2,
+  "longitude": -80.1
+}
 ```
 
 Referencias son opcionales; latitud y longitud se envían juntas o se omiten. El cliente consulta `/api/v1/me/delivery-requests` y su detalle por ID, o cancela con `POST /api/v1/me/delivery-requests/:id/cancel`. El personal con `delivery.read` consulta `/api/v1/admin/delivery-requests`; con `delivery.review` aprueba mediante `POST /api/v1/admin/delivery-requests/:id/approve` o rechaza mediante `/reject` con `{ "reason": "Motivo" }`. Las decisiones y cancelación requieren `Idempotency-Key`.
@@ -376,7 +397,6 @@ GitHub Actions ejecuta estas comprobaciones en cada push y pull request hacia `m
 
 Las pruebas de los endpoints de estado usan una conexión simulada para comprobar la respuesta HTTP y el documento OpenAPI sin depender de credenciales locales. Para comprobar PostgreSQL real, configura `.env`, inicia la API y consulta `/api/v1/health/ready`.
 
-
 ## Etapa 8B: pedido a domicilio con transferencia anticipada
 
 Aplicar las migraciones por separado, después de revisar la base de destino. La implementación y las pruebas no aplican migraciones en MontePica. Se requiere PostgreSQL local, jornada y caja actuales abiertas y `TRANSFER_PAYMENTS_ENABLED=true`; para cargar comprobantes también debe estar disponible el almacenamiento privado.
@@ -393,7 +413,6 @@ Los domicilios no admiten edición, efectivo, cierre sin pago ni entrega mediant
 
 La migración `DeliveryOrders1794300000000` conserva las migraciones anteriores y rechaza su reversión si existen datos incompatibles. Las pruebas PostgreSQL aisladas comprueban subida/reversión/subida y el flujo de domicilio con almacenamiento simulado.
 
-
 ## Etapa 8C: despacho, entrega y vencimiento
 
 La configuracion versionada de domicilios admite `receiptSubmissionSeconds`, entero de 60 a 86400, con valor inicial 900. Se guarda `delivery.receiptSubmissionDeadline` en cada nuevo pedido; modificar la configuracion no cambia plazos existentes. Los pedidos anteriores conservan un plazo nulo y no vencen automaticamente.
@@ -405,7 +424,6 @@ La carga de comprobantes comprueba el plazo con la hora de PostgreSQL antes de e
 Una tarea se ejecuta al arrancar la API y cada 60 segundos. Resuelve pedidos enviados con plazo vencido y sin pago confirmado ni intento pendiente, libera reservas, anula la liquidacion y cierra la cuenta, con historial y auditoria de sistema. Cada pedido usa su propia transaccion y el bloqueo operativo PostgreSQL compartido por las instancias. Los fallos se registran y se reintentan en la siguiente ejecucion; los vencimientos acumulados durante una parada se procesan al arrancar. La API bloquea comprobantes tardios inmediatamente, aunque la liberacion de existencias espere al siguiente ciclo.
 
 La migracion `DeliveryFulfillment1794400000000` se prueba en una base temporal y rechaza su reversion si hay datos incompatibles. No se aplica automaticamente a MontePica. Los endpoints y filtros muestran `dispatched`, fechas de despacho y entrega y el plazo del comprobante; los listados siguen omitiendo direcciones. No se incluyen repartidores, GPS, entregas fallidas ni devoluciones.
-
 
 ## Etapa 9A: cancelaciones revisadas y devoluciones pendientes
 
@@ -422,11 +440,19 @@ Las decisiones admiten jornadas anteriores. Las listas usan page/limit (1/20, ma
 Después de aprobar la cancelación de un domicilio pagado, el administrador ejecuta la devolución autorizada completa con `POST /api/v1/admin/refunds/{id}/execute`, permiso `refunds.execute`, `Idempotency-Key` y uno de estos cuerpos:
 
 ```json
-{ "method": "transfer", "bankOperationReference": "DEV-000123", "notes": "Transferencia realizada" }
+{
+  "method": "transfer",
+  "bankOperationReference": "DEV-000123",
+  "notes": "Transferencia realizada"
+}
 ```
 
 ```json
-{ "method": "cash", "recipientName": "Persona que recibió el dinero", "notes": "Efectivo entregado" }
+{
+  "method": "cash",
+  "recipientName": "Persona que recibió el dinero",
+  "notes": "Efectivo entregado"
+}
 ```
 
 La API toma el importe de la autorización 9A; no admite importes parciales. La transferencia se registra como realizada fuera del sistema, normaliza y hace única la referencia y no modifica la caja. El efectivo exige caja y jornada actuales abiertas, descuenta el importe autorizado del saldo disponible y guarda una salida inmutable. El saldo se calcula como fondo inicial más pagos confirmados en efectivo menos devoluciones en efectivo; el efectivo recibido y el cambio no se contabilizan como ingreso.
@@ -470,3 +496,17 @@ Resuelve liquidaciones sin pagar, comprobantes en revisión, consumo local sin l
 Solo el administrador puede cerrar mediante `POST /api/v1/admin/operations/cash/{id}/close`, con `Idempotency-Key` y `{ "countedCents": 12500, "reason": "Diferencia revisada" }`. La justificación es obligatoria si el conteo difiere del saldo esperado. El cálculo usa fondo inicial más pagos confirmados en efectivo menos devoluciones en efectivo; el efectivo recibido y el cambio no se cuentan como ingreso. Una diferencia no crea pagos ni movimientos ficticios.
 
 El cierre es único e inmutable. Consulta el registro guardado con `GET /api/v1/admin/operations/cash/{id}/closure`; el resumen existente y `GET /api/v1/admin/operations/current` muestran el cierre cuando se trata de la jornada actual. Cerrar caja no cierra la jornada ni las visitas. La migración `CashRegisterClosures1794900000000` se aplica por separado tras revisar el destino; su reversión se detiene si ya existen cierres. Las pruebas usan PostgreSQL temporal y no aplican migraciones a `MontePica`.
+
+## Arquitectura: servicios y repositorios
+
+Los controladores validan contratos HTTP y llaman a servicios. Los servicios aplican reglas del negocio y coordinan transacciones; las consultas, filtros SQL y operaciones del ORM pertenecen a las carpetas `repositories` de cada módulo. El catálogo y la identidad usan entidades existentes de TypeORM; los repositorios de operaciones complejas conservan SQL parametrizado y proyecciones tipadas. No se añaden entidades ni cambios de esquema para esta separación.
+
+`PersistenceModule` registra y comparte los repositorios sin estado. El catálogo registra su repositorio junto a `TypeOrmModule.forFeature`. `AccessIdentityService` permite a los guards resolver identidad y permisos sin acceder directamente a PostgreSQL. `OrdersQueryService` separa las consultas de pedidos de sus escrituras; `RefundsService` atiende las consultas y ejecuciones de devoluciones, con su propio repositorio.
+
+La transacción se abre en el servicio que coordina el caso de uso o en el coordinador idempotente. Cada escritura, consulta con bloqueo y operación de auditoría recibe el mismo `EntityManager`: los repositorios no abren, confirman ni revierten transacciones. Las lecturas independientes reciben el administrador habitual de la conexión. Los repositorios tienen métodos específicos e inputs nombrados; no ofrecen una entrada pública para ejecutar SQL arbitrario. Los filtros y fragmentos dinámicos permanecen privados dentro de la capa de datos.
+
+Auditoría, idempotencia, autorización transaccional y bloqueos operativos tienen repositorios compartidos. Se conservan las claves y el orden de bloqueos, los hashes y respuestas idempotentes existentes, el almacenamiento privado y su compensación y las transacciones individuales de las tareas de vencimiento. Los comandos `admin:create`, `seed:catalog` y `receipts:reconcile` utilizan repositorios sin iniciar un servidor HTTP. Las migraciones y el `SELECT 1` técnico del servicio de salud permanecen en infraestructura.
+
+Durante la extracción se corrigieron dos defectos previos del manejo de `UPDATE ... RETURNING`: la actualización de configuración devuelve el objeto de configuración en lugar de la tupla del controlador PostgreSQL, y la ejecución de devolución guarda su UUID correcto como recurso idempotente. Ambas correcciones tienen pruebas de regresión. Los endpoints y sus contratos documentados se conservan.
+
+Para verificar la arquitectura y las reglas, ejecutar `npm test`; para tipos, `npx tsc -p tsconfig.build.json --noEmit --incremental false`; para lint, `npm run lint`. La suite E2E se ejecuta con `$env:RUN_POSTGRES_E2E='1'; npm run test:e2e` en PowerShell: crea y elimina una base temporal, conserva las migraciones y simula S3. No usa la base `MontePica` como destino. No ejecutar un build que borre `dist` mientras esté activo el servidor en vigilancia.

@@ -1,3 +1,4 @@
+import { RefundsService } from './refunds.service.js';
 import {
   Body,
   Controller,
@@ -58,7 +59,10 @@ import { CancellationsService } from './cancellations.service.js';
 })
 @Controller('me')
 export class ClientCancellationsController {
-  constructor(private readonly s: CancellationsService) {}
+  constructor(
+    private readonly s: CancellationsService,
+    private readonly refundsService: RefundsService,
+  ) {}
   @Post('orders/:id/cancellation-requests')
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiCreatedResponse({ type: CancellationResponseDto })
@@ -114,13 +118,13 @@ export class ClientCancellationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentClient() c: ClientIdentity,
   ) {
-    return this.s.refund(id, c.clientId);
+    return this.refundsService.refund(id, c.clientId);
   }
   @Get('refunds') @ApiOkResponse({ type: RefundPageDto }) refunds(
     @Query() q: RefundListDto,
     @CurrentClient() c: ClientIdentity,
   ) {
-    return this.s.refunds(q, c.clientId);
+    return this.refundsService.refunds(q, c.clientId);
   }
 }
 @ApiTags('Cancelaciones administrativas')
@@ -133,7 +137,10 @@ export class ClientCancellationsController {
 @ApiResponse({ status: 409, description: 'Conflicto operativo.' })
 @Controller('admin')
 export class AdminCancellationsController {
-  constructor(private readonly s: CancellationsService) {}
+  constructor(
+    private readonly s: CancellationsService,
+    private readonly refundsService: RefundsService,
+  ) {}
   @Post('orders/:id/cancellation-requests')
   @RequirePermission('cancellations.create')
   @ApiHeader({ name: 'Idempotency-Key', required: true })
@@ -195,18 +202,18 @@ export class AdminCancellationsController {
     @CurrentUserContext() actor: AuthenticatedRequestContext,
     @Headers('idempotency-key') key?: string,
   ) {
-    return this.s.executeRefund(id, dto, actor, key);
+    return this.refundsService.executeRefund(id, dto, actor, key);
   }
   @Get('refunds/:id')
   @RequirePermission('refunds.read')
   @ApiOkResponse({ type: AdminRefundResponseDto })
   refund(@Param('id', ParseUUIDPipe) id: string) {
-    return this.s.refund(id, undefined, true);
+    return this.refundsService.refund(id, undefined, true);
   }
   @Get('refunds')
   @RequirePermission('refunds.read')
   @ApiOkResponse({ type: AdminRefundPageDto })
   refunds(@Query() q: RefundListDto) {
-    return this.s.refunds(q, undefined, true);
+    return this.refundsService.refunds(q, undefined, true);
   }
 }

@@ -8,6 +8,10 @@ import {
 } from '@nestjs/common';
 import { DataSource, QueryFailedError } from 'typeorm';
 import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
+import { AuditRepository } from '../database/repositories/audit.repository.js';
+import { RewardsService } from '../rewards/rewards.service.js';
+import { ParticipationIdempotencyService } from '../tables/participation-idempotency.service.js';
+import { lockTableOperations } from '../tables/table-operations.js';
 import type {
   CashClosingPreviewQueryDto,
   CloseCashRegisterDto,
@@ -15,9 +19,7 @@ import type {
 } from './dto/cash-register.dto.js';
 import { OpenCashRegisterDto } from './dto/open-cash-register.dto.js';
 import { UpdateOperationsSettingsDto } from './dto/update-operations-settings.dto.js';
-import { ParticipationIdempotencyService } from '../tables/participation-idempotency.service.js';
-import { RewardsService } from '../rewards/rewards.service.js';
-import { lockTableOperations } from '../tables/table-operations.js';
+import { OperationsRepository } from './repositories/operations.repository.js';
 
 type SettingsRow = {
   id: number;
@@ -34,14 +36,13 @@ export class OperationsService {
     private readonly dataSource: DataSource,
     private readonly idempotency: ParticipationIdempotencyService,
     private readonly rewards: RewardsService,
+    private readonly persistence: OperationsRepository = new OperationsRepository(),
+    private readonly auditRecords: AuditRepository = new AuditRepository(),
   ) {}
 
   async getSettings() {
-    const rows = await this.dataSource.query(
-      `SELECT "id_configuracion" AS id, "zona_horaria" AS "timeZone",
-        to_char("hora_apertura", 'HH24:MI') AS "openingTime",
-        to_char("hora_cierre", 'HH24:MI') AS "closingTime", "edicion_local_seg" AS "localOrderEditSeconds", "actualizada_en" AS "updatedAt"
-       FROM "configuracion_operativa" WHERE "id_configuracion" = 1`,
+    const rows = await this.persistence.getSettingsFindConfiguracionOperativa(
+      this.dataSource.manager,
     );
     return rows[0] as SettingsRow;
   }
@@ -71,22 +72,18 @@ export class OperationsService {
       const timeZone = dto.timeZone ?? before.timeZone;
       const openingTime = dto.openingTime ?? before.openingTime;
       const closingTime = dto.closingTime ?? before.closingTime;
-      const rows = await manager.query(
-        `UPDATE "configuracion_operativa"
-         SET "zona_horaria" = $1, "hora_apertura" = $2::time, "hora_cierre" = $3::time,
-             "actualizada_en" = now(), "actualizada_por" = $4, "edicion_local_seg" = $5
-         WHERE "id_configuracion" = 1
-         RETURNING "id_configuracion" AS id, "zona_horaria" AS "timeZone",
-           to_char("hora_apertura", 'HH24:MI') AS "openingTime",
-           to_char("hora_cierre", 'HH24:MI') AS "closingTime", "edicion_local_seg" AS "localOrderEditSeconds", "actualizada_en" AS "updatedAt"`,
-        [
-          timeZone,
-          openingTime,
-          closingTime,
-          actor.userId,
-          dto.localOrderEditSeconds ?? before.localOrderEditSeconds,
-        ],
-      );
+      const rows =
+        await this.persistence.updateSettingsUpdateConfiguracionOperativa(
+          manager,
+          {
+            timeZone: timeZone,
+            openingTime: openingTime,
+            closingTime: closingTime,
+            userId: actor.userId,
+            localOrderEditSeconds:
+              dto.localOrderEditSeconds ?? before.localOrderEditSeconds,
+          },
+        );
       await this.audit(
         manager,
         actor,
@@ -102,30 +99,21 @@ export class OperationsService {
 
   async getCurrent() {
     const settings = await this.getSettings();
-    const rows = await this.dataSource.query(
-      `SELECT to_char(timezone($1, now())::date, 'YYYY-MM-DD') AS "businessDate"`,
-      [settings.timeZone],
+    const rows = await this.persistence.getCurrentFindOperation(
+      this.dataSource.manager,
+      { timeZone: settings.timeZone },
     );
     const businessDate = rows[0].businessDate as string;
-    const dayRows = await this.dataSource.query(
-      `SELECT j."id_jornada" AS id, j."fecha_operativa" AS "businessDate", j."estado" AS status,
-          j."abierta_en" AS "openedAt", j."abierta_por" AS "openedBy"
-       FROM "jornada_operativa" j WHERE j."fecha_operativa" = $1::date`,
-      [businessDate],
+    const dayRows = await this.persistence.getCurrentFindJornadaOperativa(
+      this.dataSource.manager,
+      { businessDate: businessDate },
     );
     const day = dayRows[0] ?? null;
     if (!day) return { businessDate, operatingDay: null, cashRegister: null };
 
-    const cashRows = await this.dataSource.query(
-      `SELECT c."id_caja" AS id, c."estado" AS status,
-          c."monto_inicial_ctvs" AS "openingAmountCents", c."abierta_en" AS "openedAt",
-          c."abierta_por" AS "openedBy", cc.id_cierre AS "closureId", cc.cerrado_en AS "closedAt",
-          cc.cerrado_por AS "closedBy",cc.fondo_inicial_ctvs::float8 AS "closureOpeningCents",
-          cc.ingresos_efectivo_ctvs::float8 AS "closureCashIncomeCents",cc.devoluciones_efectivo_ctvs::float8 AS "closureCashRefundsCents",
-          cc.esperado_ctvs::float8 AS "expectedCents",cc.contado_ctvs::float8 AS "countedCents",
-          cc.diferencia_ctvs::float8 AS "differenceCents",cc.justificacion AS "closureReason"
-       FROM "caja" c LEFT JOIN cierre_caja cc ON cc.id_caja=c.id_caja WHERE c."id_jornada" = $1`,
-      [day.id],
+    const cashRows = await this.persistence.getCurrentFindCaja(
+      this.dataSource.manager,
+      { id: day.id },
     );
     return {
       businessDate,
@@ -135,15 +123,9 @@ export class OperationsService {
   }
 
   async getCashSummary(cashRegisterId: string) {
-    const [row] = await this.dataSource.query(
-      `SELECT c.id_caja AS "cashRegisterId",c.estado AS status,c.monto_inicial_ctvs::text AS opening,
-        COALESCE((SELECT sum(p.importe_ctvs) FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion WHERE l.id_caja=c.id_caja AND p.metodo='cash' AND p.estado='confirmed'),0)::text AS income,
-        COALESCE((SELECT sum(s.importe_ctvs) FROM salida_caja_devolucion s WHERE s.id_caja=c.id_caja),0)::text AS refunds,
-        COALESCE((SELECT sum(p.importe_ctvs) FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion WHERE l.id_caja=c.id_caja AND p.metodo='transfer' AND p.estado='confirmed'),0)::text AS transfers,
-        cc.id_cierre AS "closureId",cc.cerrado_en AS "closedAt",cc.cerrado_por AS "closedBy",
-        cc.contado_ctvs::text AS counted,cc.diferencia_ctvs::text AS difference,cc.justificacion AS reason
-       FROM caja c LEFT JOIN cierre_caja cc ON cc.id_caja=c.id_caja WHERE c.id_caja=$1`,
-      [cashRegisterId],
+    const [row] = await this.persistence.getCashSummaryFindPago(
+      this.dataSource.manager,
+      { cashRegisterId: cashRegisterId },
     );
     if (!row) throw new NotFoundException('Caja no encontrada.');
     const opening = BigInt(row.opening);
@@ -186,37 +168,18 @@ export class OperationsService {
   }
 
   async listCashRegisters(query: ListCashRegistersDto) {
-    const where = `($1::text IS NULL OR c.estado=$1) AND ($2::uuid IS NULL OR c.id_jornada=$2)`;
-    const args = [query.status ?? null, query.operatingDayId ?? null];
-    const [{ total }] = await this.dataSource.query(
-      `SELECT count(*)::int total FROM caja c WHERE ${where}`,
-      args,
-    );
-    const rows = await this.dataSource.query(
-      `SELECT c.id_caja AS id,c.id_jornada AS "operatingDayId",c.estado AS status,
-      c.monto_inicial_ctvs::float8 AS "openingCents",c.abierta_en AS "openedAt",c.abierta_por AS "openedBy",
-      cc.id_cierre AS "closureId",cc.cerrado_en AS "closedAt",cc.cerrado_por AS "closedBy",
-      cc.esperado_ctvs::float8 AS "expectedCents",cc.contado_ctvs::float8 AS "countedCents",cc.diferencia_ctvs::float8 AS "differenceCents"
-      FROM caja c LEFT JOIN cierre_caja cc ON cc.id_caja=c.id_caja WHERE ${where}
-      ORDER BY c.abierta_en DESC,c.id_caja DESC LIMIT $3 OFFSET $4`,
-      [...args, query.limit, (query.page - 1) * query.limit],
-    );
-    return { items: rows, total, page: query.page, limit: query.limit };
+    return this.persistence.listCashRegisters(this.dataSource.manager, query);
   }
 
   async getCashClosure(cashRegisterId: string) {
-    const [row] = await this.dataSource.query(
-      `SELECT id_cierre AS id,id_caja AS "cashRegisterId",cerrado_por AS "closedBy",
-      cerrado_en AS "closedAt",fondo_inicial_ctvs::float8 AS "openingCents",ingresos_efectivo_ctvs::float8 AS "cashIncomeCents",
-      devoluciones_efectivo_ctvs::float8 AS "cashRefundsCents",esperado_ctvs::float8 AS "expectedCents",
-      contado_ctvs::float8 AS "countedCents",diferencia_ctvs::float8 AS "differenceCents",justificacion AS reason,'USD' AS currency
-      FROM cierre_caja WHERE id_caja=$1`,
-      [cashRegisterId],
+    const [row] = await this.persistence.getCashClosureFindCierreCaja(
+      this.dataSource.manager,
+      { cashRegisterId: cashRegisterId },
     );
     if (!row) {
-      const [cash] = await this.dataSource.query(
-        'SELECT 1 FROM caja WHERE id_caja=$1',
-        [cashRegisterId],
+      const [cash] = await this.persistence.getCashClosureFindCaja(
+        this.dataSource.manager,
+        { cashRegisterId: cashRegisterId },
       );
       if (!cash) throw new NotFoundException('Caja no encontrada.');
       throw new NotFoundException('La caja todavía no tiene un cierre.');
@@ -228,10 +191,9 @@ export class OperationsService {
     cashRegisterId: string,
     query: CashClosingPreviewQueryDto,
   ) {
-    const [cash] = await this.dataSource.query(
-      `SELECT c.id_caja AS id,c.id_jornada AS day,c.estado AS status,
-      c.monto_inicial_ctvs::text opening FROM caja c WHERE c.id_caja=$1`,
-      [cashRegisterId],
+    const [cash] = await this.persistence.getCashClosingPreviewFindCaja(
+      this.dataSource.manager,
+      { cashRegisterId: cashRegisterId },
     );
     if (!cash) throw new NotFoundException('Caja no encontrada.');
     const snapshot = await this.cashSnapshot(
@@ -273,20 +235,17 @@ export class OperationsService {
       (manager) => this.authorizeCashClosure(manager, actor),
       async (manager) => {
         await lockTableOperations(manager);
-        const [unlockedRef] = await manager.query(
-          'SELECT id_jornada AS day FROM caja WHERE id_caja=$1',
-          [cashRegisterId],
+        const [unlockedRef] = await this.persistence.closeCashFindCaja(
+          manager,
+          { cashRegisterId: cashRegisterId },
         );
         if (!unlockedRef) throw new NotFoundException('Caja no encontrada.');
-        await manager.query(
-          'SELECT estado FROM jornada_operativa WHERE id_jornada=$1 FOR UPDATE',
-          [unlockedRef.day],
-        );
-        const [ref] = await manager.query(
-          `SELECT c.id_jornada AS day,c.estado AS status,c.monto_inicial_ctvs::text opening
-          FROM caja c WHERE c.id_caja=$1 FOR UPDATE`,
-          [cashRegisterId],
-        );
+        await this.persistence.closeCashFindJornadaOperativa(manager, {
+          day: unlockedRef.day,
+        });
+        const [ref] = await this.persistence.closeCashFindCajaNext(manager, {
+          cashRegisterId: cashRegisterId,
+        });
         if (!ref) throw new NotFoundException('Caja no encontrada.');
         if (ref.status !== 'open')
           throw new ConflictException('La caja ya está cerrada.');
@@ -324,40 +283,36 @@ export class OperationsService {
             'Debes justificar el faltante o sobrante.',
           );
         await this.rewards.releaseForOperatingDay(manager, ref.day);
-        const [closure] = await manager.query(
-          `INSERT INTO cierre_caja(id_caja,cerrado_por,fondo_inicial_ctvs,ingresos_efectivo_ctvs,
-          devoluciones_efectivo_ctvs,esperado_ctvs,contado_ctvs,diferencia_ctvs,justificacion)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id_cierre AS id,cerrado_en AS "closedAt"`,
-          [
-            cashRegisterId,
-            actor.userId,
-            Number(summary.openingCents),
-            Number(summary.cashIncomeCents),
-            Number(summary.cashRefundsCents),
-            Number(expected),
-            dto.countedCents,
-            Number(difference),
-            dto.reason ?? null,
-          ],
+        const [closure] = await this.persistence.closeCashInsertCierreCaja(
+          manager,
+          {
+            cashRegisterId: cashRegisterId,
+            userId: actor.userId,
+            openingCents: Number(summary.openingCents),
+            cashIncomeCents: Number(summary.cashIncomeCents),
+            cashRefundsCents: Number(summary.cashRefundsCents),
+            expected: Number(expected),
+            countedCents: dto.countedCents,
+            difference: Number(difference),
+            reason: dto.reason ?? null,
+          },
         );
-        await manager.query(
-          `UPDATE caja SET estado='closed' WHERE id_caja=$1`,
-          [cashRegisterId],
-        );
-        await manager.query(
-          `INSERT INTO auditoria(actor_usuario_id,actor_tipo,recurso_tipo,recurso_id,evento,detalle)
-          VALUES($1,'usuario','caja',$2,'operations.cash_closed',$3::jsonb)`,
-          [
-            actor.userId,
-            cashRegisterId,
-            JSON.stringify({
-              closureId: closure.id,
-              expectedCents: Number(expected),
-              countedCents: dto.countedCents,
-              differenceCents: Number(difference),
-              reason: dto.reason ?? null,
-            }),
-          ],
+        await this.persistence.closeCashUpdateCaja(manager, {
+          cashRegisterId: cashRegisterId,
+        });
+        await this.auditRecords.append(
+          manager,
+          { userId: actor.userId },
+          'caja',
+          cashRegisterId,
+          'operations.cash_closed',
+          {
+            closureId: closure.id,
+            expectedCents: Number(expected),
+            countedCents: dto.countedCents,
+            differenceCents: Number(difference),
+            reason: dto.reason ?? null,
+          },
         );
         const response = await this.getCashClosureWith(manager, cashRegisterId);
         return { resourceId: closure.id, response };
@@ -371,12 +326,9 @@ export class OperationsService {
   ) {
     if (!actor?.userId || !actor?.sessionId)
       throw new UnauthorizedException('Sesión no válida.');
-    const [row] = await manager.query(
-      `SELECT u.activo,r.codigo AS role,s.revocada_en,s.expira_en>clock_timestamp() AS valid,
-      EXISTS(SELECT 1 FROM rol_permiso rp JOIN permiso p ON p.id_permiso=rp.id_permiso WHERE rp.id_rol=u.id_rol AND p.codigo='operations.closeCash') AS allowed
-      FROM usuario u JOIN rol r ON r.id_rol=u.id_rol JOIN sesion_usuario s ON s.id_usuario=u.id_usuario
-      WHERE u.id_usuario=$1 AND s.id_sesion_usuario=$2 FOR SHARE OF u,s`,
-      [actor.userId, actor.sessionId],
+    const [row] = await this.persistence.authorizeCashClosureFindRolPermiso(
+      manager,
+      { userId: actor.userId, sessionId: actor.sessionId },
     );
     if (!row || !row.activo || row.revocada_en || !row.valid)
       throw new UnauthorizedException('Sesión no válida.');
@@ -389,12 +341,9 @@ export class OperationsService {
     id: string,
     opening: bigint,
   ) {
-    const [row] = await manager.query(
-      `SELECT COALESCE((SELECT sum(p.importe_ctvs) FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion WHERE l.id_caja=$1 AND p.metodo='cash' AND p.estado='confirmed'),0)::text income,
-      COALESCE((SELECT sum(s.importe_ctvs) FROM salida_caja_devolucion s WHERE s.id_caja=$1),0)::text refunds,
-      COALESCE((SELECT sum(p.importe_ctvs) FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion WHERE l.id_caja=$1 AND p.metodo='transfer' AND p.estado='confirmed'),0)::text transfers`,
-      [id],
-    );
+    const [row] = await this.persistence.cashSnapshotFindPago(manager, {
+      id: id,
+    });
     const income = BigInt(row.income),
       refunds = BigInt(row.refunds),
       transfers = BigInt(row.transfers),
@@ -424,73 +373,25 @@ export class OperationsService {
     page = 1,
     limit = 100,
   ) {
-    const queries: Array<{ key: string; sql: string }> = [
-      {
-        key: 'pendingSettlements',
-        sql: `SELECT id_liquidacion AS id FROM liquidacion WHERE id_caja=$1 AND estado='pending' ORDER BY creada_en DESC,id_liquidacion DESC`,
-      },
-      {
-        key: 'pendingTransfers',
-        sql: `SELECT p.id_pago AS id FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion WHERE l.id_caja=$1 AND p.estado='pendingVerification' ORDER BY p.creado_en DESC,p.id_pago DESC`,
-      },
-      {
-        key: 'unsettledLocalConsumption',
-        sql: `SELECT DISTINCT c.id_cuenta AS id FROM cuenta_consumo c WHERE c.id_jornada=$2 AND c.modalidad='local' AND EXISTS(SELECT 1 FROM asignacion_consumo a WHERE a.id_cuenta=c.id_cuenta AND a.estado='active' AND NOT EXISTS(SELECT 1 FROM detalle_liquidacion d JOIN liquidacion l ON l.id_liquidacion=d.id_liquidacion WHERE d.id_asignacion=a.id_asignacion AND d.vigente AND l.estado='settled')) ORDER BY id`,
-      },
-      {
-        key: 'activeOrderReservations',
-        sql: `SELECT DISTINCT c.id_cuenta AS id FROM cuenta_consumo c JOIN pedido o ON o.id_cuenta=c.id_cuenta JOIN version_pedido v ON v.id_pedido=o.id_pedido AND v.estado='current' JOIN detalle_pedido dp ON dp.id_version=v.id_version JOIN reserva_inventario ri ON ri.id_detalle=dp.id_detalle AND ri.estado='active' WHERE c.id_jornada=$2 AND c.modalidad='local' ORDER BY id`,
-      },
-    ];
-    const blockers: Record<
-      string,
-      { items: unknown[]; total: number; page: number; limit: number }
-    > = {};
-    let total = 0;
-    const reasons: Record<string, string> = {
-      pendingSettlements: 'Liquidación pendiente de cobro.',
-      pendingTransfers: 'Transferencia pendiente de verificación.',
-      unsettledLocalConsumption:
-        'Consumo local todavía no liquidado y resuelto.',
-      activeOrderReservations: 'Pedido local con existencias reservadas.',
-    };
-    for (const q of queries) {
-      const usesDay = q.sql.includes('$2');
-      const sql = usesDay ? q.sql.replaceAll('$2', '$1') : q.sql;
-      const args = [usesDay ? dayId : cashId];
-      const [{ total: count }] = await manager.query(
-        `SELECT count(*)::int AS total FROM (${sql}) AS blocker_rows`,
-        args,
-      );
-      const rows = await manager.query(`${sql} LIMIT $2 OFFSET $3`, [
-        ...args,
-        limit,
-        (page - 1) * limit,
-      ]);
-      blockers[q.key] = {
-        items: rows.map((row: Record<string, unknown>) => ({
-          ...row,
-          reason: reasons[q.key],
-        })),
-        total: count,
-        page,
-        limit,
-      };
-      total += count;
-    }
-    return { ...blockers, total };
+    return this.persistence.closingBlockers(
+      manager,
+      cashId,
+      dayId,
+      page,
+      limit,
+    );
   }
 
   private async pendingCashDayRefunds(dayId: string) {
-    const [row] = await this.dataSource.query(
-      `SELECT count(*)::int total,COALESCE(sum(d.importe_ctvs),0)::text AS "amountCents"
-      FROM devolucion d JOIN pago p ON p.id_pago=d.id_pago JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion
-      WHERE l.id_caja IN(SELECT id_caja FROM caja WHERE id_jornada=$1) AND d.estado='pending'`,
-      [dayId],
+    const [row] = await this.persistence.pendingCashDayRefundsFindDevolucion(
+      this.dataSource.manager,
+      { dayId: dayId },
     );
     const amount = BigInt(row.amountCents);
     if (amount < 0n || amount > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new ConflictException('Las devoluciones pendientes exceden el rango seguro.');
+      throw new ConflictException(
+        'Las devoluciones pendientes exceden el rango seguro.',
+      );
     }
     return { total: row.total, amountCents: Number(amount) };
   }
@@ -499,12 +400,9 @@ export class OperationsService {
     manager: import('typeorm').EntityManager,
     id: string,
   ) {
-    const [row] = await manager.query(
-      `SELECT id_cierre AS id,id_caja AS "cashRegisterId",cerrado_por AS "closedBy",cerrado_en AS "closedAt",
-      fondo_inicial_ctvs::float8 AS "openingCents",ingresos_efectivo_ctvs::float8 AS "cashIncomeCents",devoluciones_efectivo_ctvs::float8 AS "cashRefundsCents",
-      esperado_ctvs::float8 AS "expectedCents",contado_ctvs::float8 AS "countedCents",diferencia_ctvs::float8 AS "differenceCents",justificacion AS reason,'USD' AS currency
-      FROM cierre_caja WHERE id_caja=$1`,
-      [id],
+    const [row] = await this.persistence.getCashClosureWithFindCierreCaja(
+      manager,
+      { id: id },
     );
     return row;
   }
@@ -514,12 +412,9 @@ export class OperationsService {
       return await this.dataSource.transaction(async (manager) => {
         await this.lockOperations(manager);
         const settings = await this.getSettingsWith(manager);
-        const rows = await manager.query(
-          `INSERT INTO "jornada_operativa" ("fecha_operativa", "estado", "abierta_por")
-           VALUES (timezone($1, now())::date, 'open', $2)
-           RETURNING "id_jornada" AS id, "fecha_operativa" AS "businessDate", "estado" AS status,
-             "abierta_en" AS "openedAt", "abierta_por" AS "openedBy"`,
-          [settings.timeZone, actor.userId],
+        const rows = await this.persistence.openDayInsertJornadaOperativa(
+          manager,
+          { timeZone: settings.timeZone, userId: actor.userId },
         );
         await this.audit(
           manager,
@@ -546,23 +441,20 @@ export class OperationsService {
       return await this.dataSource.transaction(async (manager) => {
         await this.lockOperations(manager);
         const settings = await this.getSettingsWith(manager);
-        const days = await manager.query(
-          `SELECT "id_jornada" AS id FROM "jornada_operativa"
-           WHERE "fecha_operativa" = timezone($1, now())::date AND "estado" = 'open' FOR UPDATE`,
-          [settings.timeZone],
+        const days = await this.persistence.openCashFindJornadaOperativa(
+          manager,
+          { timeZone: settings.timeZone },
         );
         if (!days[0])
           throw new ConflictException(
             'Abre la jornada antes de abrir la caja.',
           );
 
-        const rows = await manager.query(
-          `INSERT INTO "caja" ("id_jornada", "estado", "monto_inicial_ctvs", "abierta_por")
-           VALUES ($1, 'open', $2, $3)
-           RETURNING "id_caja" AS id, "estado" AS status, "monto_inicial_ctvs" AS "openingAmountCents",
-             "abierta_en" AS "openedAt", "abierta_por" AS "openedBy"`,
-          [days[0].id, dto.openingAmountCents, actor.userId],
-        );
+        const rows = await this.persistence.openCashInsertCaja(manager, {
+          id: days[0].id,
+          openingAmountCents: dto.openingAmountCents,
+          userId: actor.userId,
+        });
         await this.audit(
           manager,
           actor,
@@ -586,17 +478,13 @@ export class OperationsService {
   private async getSettingsWith(
     manager: import('typeorm').EntityManager,
   ): Promise<SettingsRow> {
-    const rows = await manager.query(
-      `SELECT "id_configuracion" AS id, "zona_horaria" AS "timeZone",
-        to_char("hora_apertura", 'HH24:MI') AS "openingTime",
-        to_char("hora_cierre", 'HH24:MI') AS "closingTime", "edicion_local_seg" AS "localOrderEditSeconds", "actualizada_en" AS "updatedAt"
-       FROM "configuracion_operativa" WHERE "id_configuracion" = 1 FOR UPDATE`,
-    );
+    const rows =
+      await this.persistence.getSettingsWithFindConfiguracionOperativa(manager);
     return rows[0] as SettingsRow;
   }
 
   private async lockOperations(manager: import('typeorm').EntityManager) {
-    await manager.query('SELECT pg_advisory_xact_lock(71920405)');
+    await this.persistence.lockOperationsFindOperation(manager);
   }
 
   private async audit(
@@ -608,16 +496,13 @@ export class OperationsService {
     before: unknown,
     after: unknown,
   ) {
-    await manager.query(
-      `INSERT INTO "auditoria" ("actor_usuario_id", "actor_tipo", "recurso_tipo", "recurso_id", "evento", "detalle")
-       VALUES ($1, 'usuario', $2, $3, $4, $5::jsonb)`,
-      [
-        actor.userId,
-        resourceType,
-        resourceId,
-        event,
-        JSON.stringify({ before, after }),
-      ],
+    await this.auditRecords.append(
+      manager,
+      actor,
+      resourceType,
+      resourceId,
+      event,
+      { before, after },
     );
   }
 

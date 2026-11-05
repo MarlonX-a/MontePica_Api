@@ -11,6 +11,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { AuthAccessGuard } from './auth-access.guard.js';
 import { PermissionsGuard } from './permissions.guard.js';
+import { AccessIdentityService } from './access-identity.service.js';
 
 @Module({
   imports: [
@@ -29,7 +30,17 @@ import { PermissionsGuard } from './permissions.guard.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AuthAccessGuard, PermissionsGuard],
-  exports: [AuthAccessGuard, PermissionsGuard, JwtModule],
+  providers: [
+    AuthService,
+    AuthAccessGuard,
+    PermissionsGuard,
+    AccessIdentityService,
+  ],
+  exports: [
+    AuthAccessGuard,
+    PermissionsGuard,
+    JwtModule,
+    AccessIdentityService,
+  ],
 })
 export class AuthModule {}

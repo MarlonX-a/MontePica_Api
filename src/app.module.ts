@@ -1,18 +1,19 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AdminModule } from './admin/admin.module.js';
+import { AuthModule } from './auth/auth.module.js';
+import { CatalogModule } from './catalog/catalog.module.js';
 import { validateEnvironment } from './config/environment.validation.js';
 import { createDatabaseOptions } from './database/database.options.js';
+import { PersistenceModule } from './database/persistence.module.js';
 import { HealthModule } from './health/health.module.js';
-import { CatalogModule } from './catalog/catalog.module.js';
-import { AuthModule } from './auth/auth.module.js';
-import { ThrottlerModule } from '@nestjs/throttler';
-import { AdminModule } from './admin/admin.module.js';
-import { OperationsModule } from './operations/operations.module.js';
 import { InventoryModule } from './inventory/inventory.module.js';
-import { TablesModule } from './tables/tables.module.js';
-import { DeliveryModule } from './tables/delivery.module.js';
+import { OperationsModule } from './operations/operations.module.js';
 import { PointsModule } from './points/points.module.js';
+import { DeliveryModule } from './tables/delivery.module.js';
+import { TablesModule } from './tables/tables.module.js';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { PointsModule } from './points/points.module.js';
       }),
     }),
     HealthModule,
+    PersistenceModule,
     CatalogModule,
     AuthModule,
     AdminModule,

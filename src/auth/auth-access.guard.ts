@@ -1,18 +1,23 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { DataSource, IsNull, MoreThan } from 'typeorm';
 import type { Request } from 'express';
-import { User } from './entities/user.entity.js';
-import { UserSession } from './entities/user-session.entity.js';
 import { AuthenticatedRequestContext } from './auth.types.js';
+import { AccessIdentityService } from './access-identity.service.js';
 
-type AuthenticatedRequest = Request & { authContext?: AuthenticatedRequestContext };
+type AuthenticatedRequest = Request & {
+  authContext?: AuthenticatedRequestContext;
+};
 
 @Injectable()
 export class AuthAccessGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
-    private readonly dataSource: DataSource,
+    private readonly identity: AccessIdentityService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -39,24 +44,9 @@ export class AuthAccessGuard implements CanActivate {
       throw new UnauthorizedException('Sesión no válida.');
     }
 
-    const session = await this.dataSource.getRepository(UserSession).findOne({
-      where: {
-        id: payload.sid,
-        userId: payload.sub,
-        revokedAt: IsNull(),
-        expiresAt: MoreThan(new Date()),
-      },
-    });
-    if (!session) throw new UnauthorizedException('Sesión no válida.');
-
-    const user = await this.dataSource.getRepository(User).findOne({
-      where: { id: payload.sub, active: true },
-    });
-    if (!user?.active || user.accessVersion !== payload.av) {
-      throw new UnauthorizedException('Sesión no válida.');
-    }
-
-    request.authContext = { userId: user.id, sessionId: session.id };
+    const identity = await this.identity.authenticatedSession(payload);
+    if (!identity) throw new UnauthorizedException('Sesión no válida.');
+    request.authContext = identity;
     return true;
   }
 }
