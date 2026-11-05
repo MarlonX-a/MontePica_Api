@@ -405,3 +405,68 @@ La carga de comprobantes comprueba el plazo con la hora de PostgreSQL antes de e
 Una tarea se ejecuta al arrancar la API y cada 60 segundos. Resuelve pedidos enviados con plazo vencido y sin pago confirmado ni intento pendiente, libera reservas, anula la liquidacion y cierra la cuenta, con historial y auditoria de sistema. Cada pedido usa su propia transaccion y el bloqueo operativo PostgreSQL compartido por las instancias. Los fallos se registran y se reintentan en la siguiente ejecucion; los vencimientos acumulados durante una parada se procesan al arrancar. La API bloquea comprobantes tardios inmediatamente, aunque la liberacion de existencias espere al siguiente ciclo.
 
 La migracion `DeliveryFulfillment1794400000000` se prueba en una base temporal y rechaza su reversion si hay datos incompatibles. No se aplica automaticamente a MontePica. Los endpoints y filtros muestran `dispatched`, fechas de despacho y entrega y el plazo del comprobante; los listados siguen omitiendo direcciones. No se incluyen repartidores, GPS, entregas fallidas ni devoluciones.
+
+
+## Etapa 9A: cancelaciones revisadas y devoluciones pendientes
+
+Clientes registrados e invitados pueden solicitar la cancelacion completa con `POST /api/v1/me/orders/{id}/cancellation-requests`, cuerpo `{ "expectedVersion": 1, "reason": "Motivo" }` e `Idempotency-Key`. El personal usa la ruta equivalente bajo `/admin/orders`. Se admiten locales preparando/listos y domicilios pagados enviados/preparando/listos. Los pedidos despachados, entregados o anulados y las transferencias pendientes de revision quedan excluidos. Para pedidos enviados sin pagar se conserva la anulacion directa.
+
+Mientras exista una solicitud pendiente se bloquean las transiciones del pedido y nuevas liquidaciones. El cliente consulta `/me/cancellation-requests`, su detalle y puede retirar una solicitud propia mediante `POST /me/cancellation-requests/{id}/withdraw` con cuerpo vacio. El trabajador registra y consulta; solo el administrador decide con `POST /admin/cancellation-requests/{id}/approve` (cuerpo vacio) o `/reject` (`{ "reason": "Motivo" }`). Todas las escrituras requieren clave idempotente.
+
+La aprobacion cancela el pedido, libera solo reservas activas, conserva el stock ya consumido y anula liquidaciones pendientes sin modificar pagos confirmados. Un domicilio pagado genera una devolucion pendiente por el importe total, incluido envio, y cierra su cuenta. Las rutas `/me/refunds` y `/admin/refunds`, con detalle `/{id}`, permiten consultar la autorizacion. La ejecucion efectiva se describe en 9B. La cuenta distingue `paidCents`, `refundPendingCents` y `refundedCents`.
+
+Las decisiones admiten jornadas anteriores. Las listas usan page/limit (1/20, maximo 100), filtros y privacidad por propietario. El historial administrativo conserva responsables. La migracion CancellationRequests1794500000000 rechaza reversion si existen solicitudes o devoluciones; no se aplica a MontePica durante implementacion.
+
+## Etapa 9B: ejecución de devoluciones
+
+Después de aprobar la cancelación de un domicilio pagado, el administrador ejecuta la devolución autorizada completa con `POST /api/v1/admin/refunds/{id}/execute`, permiso `refunds.execute`, `Idempotency-Key` y uno de estos cuerpos:
+
+```json
+{ "method": "transfer", "bankOperationReference": "DEV-000123", "notes": "Transferencia realizada" }
+```
+
+```json
+{ "method": "cash", "recipientName": "Persona que recibió el dinero", "notes": "Efectivo entregado" }
+```
+
+La API toma el importe de la autorización 9A; no admite importes parciales. La transferencia se registra como realizada fuera del sistema, normaliza y hace única la referencia y no modifica la caja. El efectivo exige caja y jornada actuales abiertas, descuenta el importe autorizado del saldo disponible y guarda una salida inmutable. El saldo se calcula como fondo inicial más pagos confirmados en efectivo menos devoluciones en efectivo; el efectivo recibido y el cambio no se contabilizan como ingreso.
+
+El administrador y el trabajador con `refunds.read` pueden consultar devoluciones administrativas e historial. El cliente consulta solo sus devoluciones, sin ver referencia bancaria, destinatario ni datos internos del personal. La cuenta conserva el importe históricamente cobrado y muestra por separado devolución pendiente y completada. Una devolución completada no se puede modificar ni repetir.
+
+## Etapa 10A: acumulación de puntos
+
+El programa comienza deshabilitado. En Swagger, el administrador usa `PUT /api/v1/admin/points/settings`, `access-token`, `Idempotency-Key` y `{ "enabled": true, "pointsPerDollar": 2 }`. Cada cambio crea una versión inmutable. La tasa admite enteros de 1 a 1000. La consulta pública es `GET /api/v1/points/settings`; la administrativa incluye responsable y fecha.
+
+Solo los clientes registrados acumulan. Por cada pago se calcula `floor(productsCents / 100) * pointsPerDollar`: el envío y las fracciones restantes no generan puntos. Los locales acumulan al cobrar en efectivo o confirmar transferencia. Los domicilios guardan la tasa al confirmar el pago y acreditan al entregar, aunque después cambie o se deshabilite el programa. Los pagos anteriores o realizados con el programa deshabilitado no se acreditan retroactivamente.
+
+El cliente usa su JWT en `client-token` y consulta `GET /api/v1/me/points` (`balance`, `pendingPoints`) y `/api/v1/me/points/movements`. Los invitados reciben 401. Administrador y trabajador con `points.read` consultan `/api/v1/admin/clients/{id}/points` y `/movements`. El historial admite `type=earn|refundAdjustment`, `paymentId`, `page` y `limit` (1/20, máximo 100).
+
+Cancelar un domicilio antes de entregarlo invalida la acumulación pendiente. Una devolución completada revierte los puntos históricos acreditados para su pago, si existen; autorizarla todavía no descuenta puntos. Los movimientos son inmutables y se guardan en la transacción del cobro, entrega o devolución, junto con auditoría e idempotencia. No hay canjes, vencimiento ni ajustes manuales en 10A.
+
+La migración `PointsProgram1794700000000` debe aplicarse por separado al destino revisado. Rechaza su reversión si existen versiones modificadas, acumulaciones o movimientos. Las comprobaciones usan PostgreSQL temporal y no aplican migraciones a MontePica.
+
+Con `operations.read`, consultar el saldo calculado de cualquier caja mediante `GET /api/v1/admin/operations/cash/{cashRegisterId}/summary`. Las transferencias se muestran separadas del efectivo físico. La conciliación y el cierre se describen en la etapa 11A.
+
+## Etapa 10B: recompensas y canjes locales
+
+La migración `LocalRewards1794800000000` agrega recompensas, solicitudes, reservas de puntos e inventario y los permisos `rewards.read`, `rewards.manage`, `redemptions.read` y `redemptions.manage`. La migración es reversible solo mientras no haya recompensas, solicitudes, pedidos de recompensa ni movimientos asociados. No la apliques a `MontePica` desde estas comprobaciones.
+
+Con el token del administrador, crea una recompensa en `POST /api/v1/admin/rewards` con `Idempotency-Key` y, por ejemplo, `{"name":"Ceviche gratis","productId":"UUID","pointsCost":100,"active":true,"sortOrder":1}`. La lista pública `GET /api/v1/rewards` muestra solo recompensas activas cuyo producto y categoría sigan activos y visibles. El administrador y trabajador pueden consultar el catálogo administrativo; solo el administrador puede crear o modificar recompensas. Las ediciones usan `expectedVersion`; el producto asociado no se puede cambiar.
+
+El cliente registrado debe tener una participación aprobada y una cuenta abierta en una visita vigente. En `POST /api/v1/visits/{visitId}/redemptions`, envía `Idempotency-Key` y `{"rewardId":"UUID","rewardVersion":1}`. Se reserva el costo de puntos y, si el producto controla inventario, una unidad de las existencias inicializadas de la jornada durante 15 minutos. Los invitados reciben `401`; la acumulación de puntos deshabilitada no impide gastar saldo ya acreditado.
+
+El personal consulta `/api/v1/admin/redemptions`; el trabajador puede aprobar o rechazar. Aprobar con `POST /api/v1/admin/redemptions/{id}/approve` crea un pedido local de una unidad con precio cero, descuenta los puntos una vez y transfiere la reserva de inventario al pedido sin contarla dos veces. Ese pedido sigue las rutas existentes de preparación y entrega. Se puede consultar desde `/api/v1/me/orders` y se incluye como consumo de cero dólares en la liquidación. No se crea un pago ficticio ni se acumulan puntos por el canje.
+
+Cliente y personal pueden cancelar/rechazar únicamente una solicitud pendiente; una tarea al iniciar y cada minuto libera puntos e inventario de solicitudes vencidas. Salir o cerrar una visita también libera las reservas. El cierre de la cuenta por efectivo, importe cero o transferencia local cancela los canjes pendientes dentro de la transacción del cobro. Anular un pedido de recompensa antes de prepararlo, o aprobar su cancelación mediante 9A, devuelve los puntos una sola vez. Las unidades ya consumidas no se reponen al inventario. El resumen de puntos ahora distingue `balance`, `pendingPoints`, `reservedPoints` y `availablePoints`, y su historial incluye `redeem` y `redemptionReturn`.
+
+Todas las escrituras requieren clave idempotente. Las listas de recompensas y canjes usan `page`/`limit` (1/20, máximo 100) y los filtros documentados en Swagger. La base temporal E2E comprueba la migración; no se aplican migraciones ni se cargan datos en `MontePica` durante desarrollo.
+
+## Etapa 11A: conciliación y cierre de caja
+
+El administrador y el trabajador pueden consultar cajas con `GET /api/v1/admin/operations/cash?status=open&operatingDayId={uuid}`. Antes del conteo, consulta `GET /api/v1/admin/operations/cash/{id}/closing-preview`: muestra el efectivo esperado, transferencias confirmadas por separado, bloqueos y devoluciones autorizadas aún pendientes como información.
+
+Resuelve liquidaciones sin pagar, comprobantes en revisión, consumo local sin liquidar y reservas de pedidos. Los canjes pendientes de esa jornada se cancelan y liberan con historial cuando se cierra la caja. La API vuelve a comprobar los bloqueos dentro de la transacción. Una caja cerrada ya no acepta nuevos pedidos locales ni nuevas solicitudes o aprobaciones de canje. Si todavía no se abrió una caja para una jornada, se conserva el comportamiento previo que permite pedidos locales sin caja.
+
+Solo el administrador puede cerrar mediante `POST /api/v1/admin/operations/cash/{id}/close`, con `Idempotency-Key` y `{ "countedCents": 12500, "reason": "Diferencia revisada" }`. La justificación es obligatoria si el conteo difiere del saldo esperado. El cálculo usa fondo inicial más pagos confirmados en efectivo menos devoluciones en efectivo; el efectivo recibido y el cambio no se cuentan como ingreso. Una diferencia no crea pagos ni movimientos ficticios.
+
+El cierre es único e inmutable. Consulta el registro guardado con `GET /api/v1/admin/operations/cash/{id}/closure`; el resumen existente y `GET /api/v1/admin/operations/current` muestran el cierre cuando se trata de la jornada actual. Cerrar caja no cierra la jornada ni las visitas. La migración `CashRegisterClosures1794900000000` se aplica por separado tras revisar el destino; su reversión se detiene si ya existen cierres. Las pruebas usan PostgreSQL temporal y no aplican migraciones a `MontePica`.

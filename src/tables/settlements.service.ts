@@ -26,7 +26,9 @@ export class SettlementsService {
     account.productsCents=account.totalCents;
     const [shipping]=await m.query(`SELECT COALESCE(sum(envio_ctvs),0)::float8 AS fee,COALESCE(sum(CASE WHEN estado='settled' THEN envio_ctvs ELSE 0 END),0)::float8 AS paid FROM liquidacion WHERE id_cuenta=$1 AND estado<>'cancelled'`,[id]);
     account.shippingCents=shipping.fee; account.totalCents+=shipping.fee; totals.paid+=shipping.paid; totals.resolved+=shipping.paid;
-    account.paidCents=totals.paid; account.pendingCents=account.totalCents-totals.resolved;
+    account.paidCents=totals.paid; account.pendingCents=Math.max(0,account.totalCents-totals.resolved);
+    const [refund]=await m.query(`SELECT COALESCE(sum(d.importe_ctvs) FILTER (WHERE d.estado='pending'),0)::float8 AS pending,COALESCE(sum(d.importe_ctvs) FILTER (WHERE d.estado='completed'),0)::float8 AS completed FROM devolucion d JOIN pedido o ON o.id_pedido=d.id_pedido WHERE o.id_cuenta=$1`,[id]);
+    account.refundPendingCents=refund.pending;account.refundedCents=refund.completed;
     const [pending] = await m.query(`SELECT id_liquidacion AS id,estado AS status,total_ctvs::float8 AS "totalCents" FROM liquidacion WHERE id_cuenta=$1 AND estado='pending'`,[id]);
     account.pendingSettlement=pending ?? null; return account;
   }
@@ -65,6 +67,8 @@ export class SettlementsService {
       if (account.estado!=='open') throw new ConflictException('La cuenta está cerrada.');
       const [existing]=await m.query(`SELECT 1 FROM liquidacion WHERE id_cuenta=$1 AND estado='pending'`,[accountId]);
       if (existing) throw new ConflictException('La cuenta ya tiene una liquidación pendiente.');
+      const [cancellation]=await m.query(`SELECT 1 FROM solicitud_cancelacion s JOIN pedido o ON o.id_pedido=s.id_pedido WHERE o.id_cuenta=$1 AND s.estado='pending' LIMIT 1`,[accountId]);
+      if(cancellation) throw new ConflictException('Hay una solicitud de cancelacion pendiente.');
       const [unfinished]=await m.query(`SELECT 1 FROM pedido WHERE id_cuenta=$1 AND estado NOT IN ('delivered','cancelled') LIMIT 1`,[accountId]);
       if (unfinished) throw new ConflictException('Todos los pedidos deben estar entregados.');
       const items:Array<{id:string;quantity:number;price:number}>=await m.query(`SELECT a.id_asignacion AS id,a.cantidad AS quantity,d.precio_unitario_ctvs AS price FROM asignacion_consumo a JOIN detalle_pedido d ON d.id_detalle=a.id_detalle WHERE a.id_cuenta=$1 AND a.estado='active' ORDER BY a.id_asignacion FOR UPDATE OF a`,[accountId]);

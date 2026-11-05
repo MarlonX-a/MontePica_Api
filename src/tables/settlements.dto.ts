@@ -82,6 +82,8 @@ export class AccountResponseDto {
   @ApiProperty({type:[ConsumptionLineDto]}) items:ConsumptionLineDto[];
   @ApiProperty() totalCents:number;
   @ApiProperty() paidCents:number;
+  @ApiProperty() refundPendingCents:number;
+  @ApiProperty() refundedCents:number;
   @ApiProperty() pendingCents:number;
   @ApiProperty({enum:['USD']}) currency:string;
   @ApiProperty({type:PendingSettlementDto,nullable:true}) pendingSettlement:PendingSettlementDto|null;

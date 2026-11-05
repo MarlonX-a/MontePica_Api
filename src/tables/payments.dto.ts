@@ -24,6 +24,9 @@ export class PaymentResponseDto {
   @ApiProperty({enum:['cash','transfer']}) method:string;
   @ApiProperty({enum:['pendingVerification','confirmed','rejected']}) status:string;
   @ApiProperty() amountCents:number;
+  @ApiProperty({description:'Importe históricamente cobrado; una devolución no modifica este dato.'}) paidCents:number;
+  @ApiProperty() refundPendingCents:number;
+  @ApiProperty() refundedCents:number;
   @ApiProperty({type:Number,nullable:true}) receivedCents:number|null;
   @ApiProperty({type:Number,nullable:true}) changeCents:number|null;
   @ApiProperty({type:'object',nullable:true,additionalProperties:true}) receipt:Record<string,unknown>|null;

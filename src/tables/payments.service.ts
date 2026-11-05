@@ -1,3 +1,4 @@
+import { RewardsService } from '../rewards/rewards.service.js';
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
@@ -5,10 +6,11 @@ import { ParticipationIdempotencyService } from './participation-idempotency.ser
 import { auditTableOperation } from './table-audit.js';
 import { lockTableOperations } from './table-operations.js';
 import type { AdminPaymentListDto, PaymentListDto } from './payments.dto.js';
+import { PointsService } from '../points/points.service.js';
 
 @Injectable()
 export class PaymentsService {
-  constructor(private readonly db:DataSource, private readonly idempotency:ParticipationIdempotencyService) {}
+  constructor(private readonly db:DataSource, private readonly idempotency:ParticipationIdempotencyService, private readonly points:PointsService,private readonly rewards:RewardsService) {}
 
   private async authorize(m:EntityManager,actor:AuthenticatedRequestContext) {
     const [session]=await m.query(`SELECT u.activo,s.revocada_en,s.expira_en>clock_timestamp() AS valid FROM usuario u JOIN sesion_usuario s ON s.id_usuario=u.id_usuario WHERE u.id_usuario=$1 AND s.id_sesion_usuario=$2 FOR SHARE OF u,s`,[actor.userId,actor.sessionId]);
@@ -38,10 +40,12 @@ export class PaymentsService {
       if (!zero) {
         const [created]=await m.query(`INSERT INTO pago(id_liquidacion,metodo,estado,importe_ctvs,recibido_ctvs,cambio_ctvs,registrado_usuario) VALUES ($1,'cash','confirmed',$2,$3,$4,$5) RETURNING id_pago AS id`,[id,settlement.total,receivedCents,receivedCents!-settlement.total,actor.userId]);
         await m.query(`INSERT INTO historial_pago(id_pago,actor_usuario,estado_nuevo,evento) VALUES ($1,$2,'confirmed','payment.confirmed')`,[created.id,actor.userId]);
+        await this.points.recordConfirmedPayment(m,created.id);
         payment=await this.detail(created.id,undefined,true,m);
       }
       await m.query(`UPDATE liquidacion SET estado='settled',cerrada_en=clock_timestamp(),cerrada_por=$2,resolucion=$3 WHERE id_liquidacion=$1`,[id,actor.userId,zero?'zeroTotal':'cash']);
       await m.query(`UPDATE cuenta_consumo SET estado='closed',cerrada_en=clock_timestamp() WHERE id_cuenta=$1`,[ref.id_cuenta]);
+      await this.rewards.releaseForParticipant(m,ref.id_participante);
       await m.query(`UPDATE participante SET estado='finished',finalizada_en=clock_timestamp() WHERE id_participante=$1`,[ref.id_participante]);
       await auditTableOperation(m,{userId:actor.userId},'liquidacion',id,zero?'settlement.zero_completed':'payment.confirmed',{paymentId:payment?.id ?? null,accountId:ref.id_cuenta,totalCents:settlement.total});
       return {resourceId:id,response:{payment,settlement:{id,status:'settled'},account:{id:ref.id_cuenta,status:'closed'},participant:{id:ref.id_participante,status:'finished'}}};
@@ -49,7 +53,7 @@ export class PaymentsService {
   }
 
   async detail(id:string,clientId?:string,admin=false,m:EntityManager=this.db.manager) {
-    const [payment]=await m.query(`SELECT p.id_pago AS id,p.id_liquidacion AS "settlementId",l.id_cuenta AS "accountId",l.id_caja AS "cashRegisterId",p.metodo AS method,p.estado AS status,p.importe_ctvs::float8 AS "amountCents",p.recibido_ctvs::float8 AS "receivedCents",p.cambio_ctvs::float8 AS "changeCents",'USD' AS currency,p.creado_en AS "createdAt",p.verificado_en AS "verifiedAt",p.motivo_rechazo AS "rejectionReason" FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta WHERE p.id_pago=$1 AND ($2::uuid IS NULL OR c.id_cliente=$2)`,[id,clientId ?? null]);
+    const [payment]=await m.query(`SELECT p.id_pago AS id,p.id_liquidacion AS "settlementId",l.id_cuenta AS "accountId",l.id_caja AS "cashRegisterId",p.metodo AS method,p.estado AS status,p.importe_ctvs::float8 AS "amountCents",CASE WHEN p.estado='confirmed' THEN p.importe_ctvs::float8 ELSE 0 END AS "paidCents",COALESCE((SELECT d.importe_ctvs FROM devolucion d WHERE d.id_pago=p.id_pago AND d.estado='pending'),0)::float8 AS "refundPendingCents",COALESCE((SELECT d.importe_ctvs FROM devolucion d WHERE d.id_pago=p.id_pago AND d.estado='completed'),0)::float8 AS "refundedCents",p.recibido_ctvs::float8 AS "receivedCents",p.cambio_ctvs::float8 AS "changeCents",'USD' AS currency,p.creado_en AS "createdAt",p.verificado_en AS "verifiedAt",p.motivo_rechazo AS "rejectionReason" FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta WHERE p.id_pago=$1 AND ($2::uuid IS NULL OR c.id_cliente=$2)`,[id,clientId ?? null]);
     if (!payment) throw new NotFoundException('Pago no encontrado.');
     const [receipt]=await m.query(`SELECT mime,tamano AS size,sha256,cargado_en AS "uploadedAt" FROM comprobante WHERE id_pago=$1`,[id]);
     payment.receipt=receipt ?? null;

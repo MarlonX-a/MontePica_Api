@@ -20,10 +20,14 @@ import { PaymentsService } from './payments.service.js';
 import { ReceiptStorageService } from './receipt-storage.service.js';
 import { AdminTransfersController, ClientTransfersController } from './transfers.controller.js';
 import { TransfersService } from './transfers.service.js';
+import { CancellationsService } from './cancellations.service.js';
+import { AdminCancellationsController, ClientCancellationsController } from './cancellations.controller.js';
+import { PointsService } from '../points/points.service.js';
+import { RewardsModule } from '../rewards/rewards.module.js';
 
 @Module({
-  imports: [AuthModule],
-  controllers: [TablesController, GuestSessionsController, TableAccessController, ClientParticipantsController, AdminParticipantsController, ClientOrdersController, AdminOrdersController, ClientSettlementsController, AdminSettlementsController, ClientPaymentsController, AdminPaymentsController, ClientTransfersController, AdminTransfersController],
-  providers: [DeliveryExpiryService, TablesService, GuestSessionsService, TableAccessService, ClientAccessGuard, GuestSessionGuard, ParticipantsService, ParticipationIdempotencyService, OrdersService, SettlementsService, PaymentsService, ReceiptStorageService, TransfersService],
+  imports: [AuthModule, RewardsModule],
+  controllers: [TablesController, GuestSessionsController, TableAccessController, ClientParticipantsController, AdminParticipantsController, ClientOrdersController, AdminOrdersController, ClientSettlementsController, AdminSettlementsController, ClientPaymentsController, AdminPaymentsController, ClientTransfersController, AdminTransfersController, ClientCancellationsController, AdminCancellationsController],
+  providers: [DeliveryExpiryService, PointsService, TablesService, GuestSessionsService, TableAccessService, ClientAccessGuard, GuestSessionGuard, ParticipantsService, ParticipationIdempotencyService, OrdersService, SettlementsService, PaymentsService, ReceiptStorageService, TransfersService, CancellationsService],
 })
 export class TablesModule {}

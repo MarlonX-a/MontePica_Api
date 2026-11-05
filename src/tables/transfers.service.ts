@@ -1,3 +1,4 @@
+import { RewardsService } from '../rewards/rewards.service.js';
 import { expireDelivery } from './delivery-expiry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException, UnsupportedMediaTypeException } from '@nestjs/common';
@@ -9,13 +10,14 @@ import { ParticipationIdempotencyService } from './participation-idempotency.ser
 import { ReceiptStorageService } from './receipt-storage.service.js';
 import { auditTableOperation } from './table-audit.js';
 import { lockTableOperations } from './table-operations.js';
+import { PointsService } from '../points/points.service.js';
 
 export type ReceiptFile = { buffer:Buffer; mimetype:string; size:number };
 type TransferActor = { userId?:string; guestSessionId?:string };
 
 @Injectable()
 export class TransfersService {
-  constructor(private readonly db:DataSource,private readonly keys:ParticipationIdempotencyService,private readonly storage:ReceiptStorageService,private readonly participants:ParticipantsService) {}
+  constructor(private readonly db:DataSource,private readonly keys:ParticipationIdempotencyService,private readonly storage:ReceiptStorageService,private readonly participants:ParticipantsService,private readonly points:PointsService,private readonly rewards:RewardsService) {}
 
   private async staff(m:EntityManager,actor:AuthenticatedRequestContext,permission:string) {
     const [s]=await m.query(`SELECT u.activo,s.revocada_en,s.expira_en>clock_timestamp() AS valid FROM usuario u JOIN sesion_usuario s ON s.id_usuario=u.id_usuario WHERE u.id_usuario=$1 AND s.id_sesion_usuario=$2 FOR SHARE OF u,s`,[actor.userId,actor.sessionId]);
@@ -88,8 +90,10 @@ export class TransfersService {
         const status=decision==='confirm'?'confirmed':'rejected';
         await m.query(`UPDATE pago SET estado=$2,verificado_por=$3,verificado_en=clock_timestamp(),operacion_bancaria_confirmada=$4,motivo_rechazo=$5 WHERE id_pago=$1`,[id,status,actor.userId,decision==='confirm'?normalized:null,decision==='reject'?normalized:null]);
         if (decision==='confirm') {
+          await this.points.recordConfirmedPayment(m,id);
           await m.query(`UPDATE liquidacion SET estado='settled',cerrada_en=clock_timestamp(),cerrada_por=$2,resolucion='transfer' WHERE id_liquidacion=$1`,[ref.id_liquidacion,actor.userId]);
           if (ref.modalidad==='local') await m.query(`UPDATE cuenta_consumo SET estado='closed',cerrada_en=clock_timestamp() WHERE id_cuenta=$1`,[ref.id_cuenta]);
+          if (ref.modalidad==='local') await this.rewards.releaseForParticipant(m,ref.id_participante);
           if (ref.modalidad==='local') await m.query(`UPDATE participante SET estado='finished',finalizada_en=clock_timestamp() WHERE id_participante=$1`,[ref.id_participante]);
         }
         if(decision==='reject') {

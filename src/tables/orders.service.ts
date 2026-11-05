@@ -7,10 +7,12 @@ import { ParticipationIdempotencyService } from './participation-idempotency.ser
 import { ParticipantsService } from './participants.service.js';
 import { auditTableOperation } from './table-audit.js';
 import { lockActiveVisit, lockTableOperations } from './table-operations.js';
+import { PointsService } from '../points/points.service.js';
+import { RewardsService } from '../rewards/rewards.service.js';
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly db: DataSource, private readonly idempotency: ParticipationIdempotencyService, private readonly participants: ParticipantsService, private readonly config:ConfigService) {}
+  constructor(private readonly db: DataSource, private readonly idempotency: ParticipationIdempotencyService, private readonly participants: ParticipantsService, private readonly config:ConfigService, private readonly points:PointsService, private readonly rewards:RewardsService) {}
 
   async edit(id: string, dto: EditOrderDto, client: ClientIdentity, key?: string) {
     const ids = dto.items.map(item => item.productId.toLowerCase());
@@ -71,7 +73,7 @@ export class OrdersService {
       const [ref] = await m.query('SELECT id_visita FROM pedido WHERE id_pedido=$1', [id]);
       if (!ref) throw new NotFoundException('Pedido no encontrado.');
       if (action === 'start-preparation' && ref.id_visita) await lockActiveVisit(m, ref.id_visita, zone);
-      const [order] = await m.query(`SELECT o.estado,o.modalidad,o.id_jornada,o.id_cuenta,v.id_version,v.numero FROM pedido o JOIN version_pedido v ON v.id_pedido=o.id_pedido AND v.estado='current' WHERE o.id_pedido=$1 FOR UPDATE OF o,v`, [id]);
+      const [order] = await m.query(`SELECT o.estado,o.modalidad,o.origen,o.id_jornada,o.id_cuenta,v.id_version,v.numero FROM pedido o JOIN version_pedido v ON v.id_pedido=o.id_pedido AND v.estado='current' WHERE o.id_pedido=$1 FOR UPDATE OF o,v`, [id]);
       if (order.modalidad==='delivery') {
         if (client) throw new ConflictException('Operación no habilitada para domicilios.');
         const [account]=await m.query('SELECT estado FROM cuenta_consumo WHERE id_cuenta=$1 FOR UPDATE',[order.id_cuenta]);
@@ -89,6 +91,8 @@ export class OrdersService {
           await m.query(`UPDATE cuenta_consumo SET estado='closed',cerrada_en=clock_timestamp() WHERE id_cuenta=$1`,[order.id_cuenta]);
         }
       }
+      const [pendingCancellation]=await m.query(`SELECT 1 FROM solicitud_cancelacion WHERE id_pedido=$1 AND estado='pending'`,[id]);
+      if(pendingCancellation && action!=='cancel') throw new ConflictException('El pedido tiene una solicitud de cancelacion pendiente.');
       if (action==='dispatch' && order.modalidad!=='delivery') throw new ConflictException('Solo domicilios admiten despacho.');
       const expected: Record<string, string> = { cancel:'submitted', 'start-preparation':'submitted', ready:'preparing', dispatch:'ready', deliver:order.modalidad==='delivery'?'dispatched':'ready' };
       if (order.numero !== dto.expectedVersion || order.estado !== expected[action]) throw new ConflictException('Estado o versión del pedido no válidos.');
@@ -106,10 +110,12 @@ export class OrdersService {
         if (action === 'cancel') await m.query(`UPDATE asignacion_consumo SET estado='superseded' WHERE id_detalle IN (SELECT id_detalle FROM detalle_pedido WHERE id_version=$1) AND estado='active'`, [order.id_version]);
       }
       await m.query('UPDATE pedido SET estado=$2 WHERE id_pedido=$1', [id,target[action]]);
+      if (action==='cancel' && order.origen==='reward') await this.rewards.refundForOrder(m,id,actor);
       if (order.modalidad==='delivery' && (action==='dispatch' || action==='deliver')) {
         const field=action==='dispatch'?'despachado':'entregado';
         await m.query(`UPDATE entrega_domicilio SET ${field}_en=clock_timestamp(),${field}_por=$2 WHERE id_pedido=$1`,[id,actor.userId]);
         if(action==='deliver') await m.query(`UPDATE cuenta_consumo SET estado='closed',cerrada_en=clock_timestamp() WHERE id_cuenta=$1`,[order.id_cuenta]);
+        if(action==='deliver') await this.points.deliverOrder(m,id,actor.userId ?? '');
       }
       const reason = 'reason' in dto ? dto.reason : null;
       await m.query(`INSERT INTO historial_pedido(id_pedido,id_version,actor_usuario,actor_sesion_cliente,actor_tipo,evento,estado_anterior,estado_nuevo,motivo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id,order.id_version,actor.userId ?? null,actor.guestSessionId ?? null,actor.guestSessionId ? 'sesion_cliente':'usuario',`order.${action}`,order.estado,target[action],reason]);
@@ -131,6 +137,8 @@ export class OrdersService {
       await lockActiveVisit(m, visitId, zone);
       const [account] = await m.query(`SELECT c.id_cuenta AS id,c.id_jornada AS day FROM participante p JOIN cuenta_consumo c ON c.id_participante=p.id_participante WHERE p.id_visita=$1 AND p.id_cliente=$2 AND p.estado='approved' AND c.estado='open' FOR UPDATE OF p,c`, [visitId, client.clientId]);
       if (!account) throw new ConflictException('Se requiere una participación aprobada y cuenta abierta.');
+      const [cash] = await m.query(`SELECT estado FROM caja WHERE id_jornada=$1`, [account.day]);
+      if (cash?.estado === 'closed') throw new ConflictException('La caja de la jornada ya fue cerrada.');
       const [pending] = await m.query(`SELECT 1 FROM liquidacion WHERE id_cuenta=$1 AND estado='pending'`,[account.id]);
       if (pending) throw new ConflictException('La cuenta tiene una liquidación pendiente.');
       const products: Array<{ id: string; price: number; tracks: boolean }> = await m.query(`SELECT p.id_producto AS id,p.precio_ctvs AS price,p.controla_inventario AS tracks FROM producto p JOIN categoria c ON c.id_categoria=p.id_categoria WHERE p.id_producto=ANY($1::uuid[]) AND p.activo AND p.visible_menu AND c.activa ORDER BY p.id_producto FOR SHARE OF p,c`, [ids]);

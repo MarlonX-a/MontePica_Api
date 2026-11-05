@@ -27,8 +27,14 @@ import { CreateCashPayments1794000000000 } from '../src/database/migrations/1794
 import { CreateTransferReceipts1794100000000 } from '../src/database/migrations/1794100000000-CreateTransferReceipts.js';
 import { CreateDeliveryCoverage1794200000000 } from '../src/database/migrations/1794200000000-CreateDeliveryCoverage.js';
 import { DeliveryOrders1794300000000 } from '../src/database/migrations/1794300000000-DeliveryOrders.js';
+import { CancellationRequests1794500000000 } from '../src/database/migrations/1794500000000-CancellationRequests.js';
+import { ExecuteRefunds1794600000000 } from '../src/database/migrations/1794600000000-ExecuteRefunds.js';
+import { PointsProgram1794700000000 } from '../src/database/migrations/1794700000000-PointsProgram.js';
+import { LocalRewards1794800000000 } from '../src/database/migrations/1794800000000-LocalRewards.js';
+import { CashRegisterClosures1794900000000 } from '../src/database/migrations/1794900000000-CashRegisterClosures.js';
 import { DeliveryFulfillment1794400000000 } from '../src/database/migrations/1794400000000-DeliveryFulfillment.js';
 import { DeliveryExpiryService } from '../src/tables/delivery-expiry.service.js';
+import { RewardsService } from '../src/rewards/rewards.service.js';
 import { ReceiptStorageService } from '../src/tables/receipt-storage.service.js';
 
 // Opt-in only: credentials from .env are used against postgres to CREATE a fresh, disposable database.
@@ -62,7 +68,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     created = true;
     db = new DataSource({ ...options, migrations: [CreateCatalogTables1792080000000, CreateIdentityTables1792340000000,
       CreatePermissionsAndAudit1792600000000, AllowUncategorizedProducts1793200000000, RequireProductCategory1793300000000,
-      CreateOperationsOpening1793400000000, CreateDailyInventory1793500000000, CreateTableVisits1793600000000, CreateLocalOrders1793700000000, OrderLifecycle1793800000000, CreateSettlements1793900000000, CreateCashPayments1794000000000, CreateTransferReceipts1794100000000, CreateDeliveryCoverage1794200000000, DeliveryOrders1794300000000,DeliveryFulfillment1794400000000] });
+      CreateOperationsOpening1793400000000, CreateDailyInventory1793500000000, CreateTableVisits1793600000000, CreateLocalOrders1793700000000, OrderLifecycle1793800000000, CreateSettlements1793900000000, CreateCashPayments1794000000000, CreateTransferReceipts1794100000000, CreateDeliveryCoverage1794200000000, DeliveryOrders1794300000000,DeliveryFulfillment1794400000000,CancellationRequests1794500000000,ExecuteRefunds1794600000000,PointsProgram1794700000000,LocalRewards1794800000000,CashRegisterClosures1794900000000] });
     await db.initialize();
     await db.runMigrations();
     // Empty-database up/down/up check; never revert a database containing user data.
@@ -124,6 +130,36 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     await db.query('DROP TRIGGER test_audit_failure ON auditoria');
     await db.query('DROP FUNCTION reject_test_audit()');
   }
+
+  async function createCashRefundFixture(index: number, amount: number) {
+    const settings = await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key',`9b-cash-settings-${index}`).send({enabled:true,coverageDescription:'Centro',shippingFeeCents:0}).expect(200);
+    const coverage = await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key',`9b-cash-coverage-${index}`).send({configurationVersion:settings.body.version,recipientName:'Cliente',phone:'099',address:`Direccion ${index}`}).expect(201);
+    await request(http()).post(`/api/v1/admin/delivery-requests/${coverage.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`9b-cash-coverage-approve-${index}`).send({}).expect(200);
+    const [category] = await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ($1,$2) RETURNING id_categoria`,[`9B cash ${index}`,`9b cash ${index}`]);
+    const [product] = await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,$2,'Producto', $3, false) RETURNING id_producto`,[category.id_categoria,`9b-cash-${index}`,amount]);
+    const order = await request(http()).post(`/api/v1/me/delivery-requests/${coverage.body.id}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key',`9b-cash-order-${index}`).send({items:[{productId:product.id_producto,quantity:1}]}).expect(201);
+    const proof = await request(http()).post(`/api/v1/me/settlements/${order.body.settlement.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key',`9b-cash-proof-${index}`).attach('file',Buffer.from('%PDF-1.7 proof'),{filename:'proof.pdf',contentType:'application/pdf'}).expect(201);
+    await request(http()).post(`/api/v1/admin/payments/${proof.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',`9b-cash-confirm-${index}`).send({bankOperationReference:`9B-CASH-${index}`}).expect(200);
+    const cancellation = await request(http()).post(`/api/v1/me/orders/${order.body.id}/cancellation-requests`).set('Authorization',auth(tokens.client)).set('Idempotency-Key',`9b-cash-cancel-${index}`).send({expectedVersion:1,reason:'Devolucion en efectivo'}).expect(201);
+    const refund = await request(http()).post(`/api/v1/admin/cancellation-requests/${cancellation.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key',`9b-cash-cancel-approve-${index}`).send({}).expect(200);
+    return refund.body.refund.id as string;
+  }
+
+  it('configures points with authorization, validation, idempotency and audited rollback',async()=>{
+    const initial=await request(http()).get('/api/v1/points/settings').expect(200);expect(initial.body.enabled).toBe(false);
+    const guest=await guests.create({name:'Puntos invitado'});
+    await request(http()).get('/api/v1/me/points').set('Authorization',auth(guest.token)).expect(401);
+    await request(http()).get('/api/v1/me/points').set('Authorization',auth(tokens.worker)).expect(403);
+    await request(http()).put('/api/v1/admin/points/settings').set('Authorization',auth(tokens.worker)).set('Idempotency-Key','points-denied').send({enabled:true,pointsPerDollar:2}).expect(403);
+    await request(http()).put('/api/v1/admin/points/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','points-invalid').send({enabled:true,pointsPerDollar:0}).expect(400);
+    const update=()=>request(http()).put('/api/v1/admin/points/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','points-enable').send({enabled:true,pointsPerDollar:2});
+    await failAudit('points.settings_updated');try{await update().expect(500);}finally{await restoreAudit();}
+    const configured=await update().expect(200);expect(configured.body.version).toBe(2);expect((await update().expect(200)).body).toEqual(configured.body);
+    const pointsRunner=db.createQueryRunner();await pointsRunner.connect();await pointsRunner.startTransaction();try{await expect(new PointsProgram1794700000000().down(pointsRunner)).rejects.toThrow('existen configuraciones');}finally{await pointsRunner.rollbackTransaction();await pointsRunner.release();}
+    await expect(db.query('UPDATE configuracion_puntos SET habilitado=false WHERE version=2')).rejects.toThrow('inmutables');
+    await request(http()).get('/api/v1/me/points/movements').set('Authorization',auth(tokens.client)).expect(200);
+    await request(http()).get('/api/v1/admin/clients/00000000-0000-0000-0000-000000000000/points').set('Authorization',auth(tokens.worker)).expect(404);
+  });
 
   it('creates an idempotent order, reserves stock and prevents closing an account with consumption', async () => {
     const f = await fixture();
@@ -581,6 +617,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     expect(docs.body.paths['/api/v1/table-access/resolve'].post.security).toEqual([{ 'client-token': [] }]);
     expect(docs.body.paths['/api/v1/guest-sessions/current'].delete.security).toEqual([{ 'client-token': [] }]);
     expect(docs.body.paths['/api/v1/visits/{id}/participants'].post.security).toEqual([{ 'client-token': [] }]);
+    expect(docs.body.paths['/api/v1/admin/refunds/{id}/execute'].post.security).toEqual([{ 'access-token': [] }]);
+    expect(docs.body.paths['/api/v1/admin/operations/cash/{id}/summary'].get).toBeDefined();
+    expect(docs.body.paths['/api/v1/admin/operations/cash'].get).toBeDefined();
+    expect(docs.body.paths['/api/v1/admin/operations/cash/{id}/closing-preview'].get).toBeDefined();
+    expect(docs.body.paths['/api/v1/admin/operations/cash/{id}/close'].post.parameters.some((p:{name:string})=>p.name==='Idempotency-Key')).toBe(true);
+    expect(docs.body.paths['/api/v1/admin/operations/cash/{id}/closure'].get).toBeDefined();
+    expect(docs.body.paths['/api/v1/me/refunds/{id}'].get.security).toEqual([{ 'client-token': [] }]);
     let limited = 0;
     for (let i = 0; i < 11; i++) {
       const response = await request(http()).post('/api/v1/guest-sessions').send({ name: 'Rate test' });
@@ -713,6 +756,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     const collect=()=>request(http()).post(paymentUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','cash-payment').send({receivedCents:700});
     const [payment,simultaneous]=await Promise.all([collect().expect(201),collect().expect(201)]);
     expect(simultaneous.body).toEqual(payment.body);
+    const earned=await request(http()).get(`/api/v1/me/points/movements?paymentId=${payment.body.payment.id}`).set('Authorization',auth(tokens.client)).expect(200);expect(earned.body.total).toBe(1);expect(earned.body.items[0].points).toBe(10);
     expect(payment.body.payment.amountCents).toBe(500); expect(payment.body.payment.changeCents).toBe(200);
     expect((await collect().expect(201)).body).toEqual(payment.body);
     await request(http()).post(paymentUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','second-payment').send({receivedCents:700}).expect(409);
@@ -766,7 +810,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     const account=await request(http()).get(`/api/v1/me/accounts/${order.accountId}`).set('Authorization',auth(tokens.client)).expect(200);expect(account.body.status).toBe('open');expect(account.body.paidCents).toBe(700);expect(account.body.pendingCents).toBe(0);
     await action('cancel','8b-paid-cancel').expect(409);await action('start-preparation','8b-start').expect(200);await action('start-preparation','8b-start').expect(200);await action('ready','8b-ready').expect(200);await action('deliver','8b-deliver').expect(409);
     const dispatch=()=>action('dispatch','8c-dispatch');await dispatch().expect(200);await dispatch().expect(200);
+    const [snapshot]=await db.query('SELECT puntos::int AS points,estado FROM acumulacion_puntos WHERE id_pago=$1',[transfer.body.id]);expect(snapshot.estado).toBe('pending');
+    await request(http()).put('/api/v1/admin/points/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','points-rate-change').send({enabled:false,pointsPerDollar:8}).expect(200);
+    await failAudit('points.earned');try{await action('deliver','8c-deliver').expect(500);}finally{await restoreAudit();}
     await action('deliver','8c-deliver').expect(200);
+    const history=await request(http()).get(`/api/v1/me/points/movements?paymentId=${transfer.body.id}`).set('Authorization',auth(tokens.client)).expect(200);expect(history.body.items[0].points).toBe(snapshot.points);
+    await request(http()).put('/api/v1/admin/points/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','points-rate-restore').send({enabled:true,pointsPerDollar:2}).expect(200);
+
     const delivered=await request(http()).get(`/api/v1/me/accounts/${order.accountId}`).set('Authorization',auth(tokens.client)).expect(200);expect(delivered.body.status).toBe('closed');
     const [stock]=await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[product.id_producto]);expect(stock).toEqual({cantidad_fisica:2,cantidad_reservada:0});
     await request(http()).get(`/api/v1/me/orders/${order.id}`).set('Authorization',auth(guest.token)).expect(404);
@@ -792,7 +842,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     const [pendingReview]=await db.query('SELECT estado FROM pedido WHERE id_pedido=$1',[retry.body.id]);expect(pendingReview.estado).toBe('submitted');
     await request(http()).post(`/api/v1/admin/payments/${attempt.body.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-reject').send({reason:'No acreditado'}).expect(200);
     await request(http()).post(`/api/v1/admin/orders/${retry.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-rejected-cancel').send({expectedVersion:1,reason:'No pagado'}).expect(409);
-    await expect(db.undoLastMigration()).rejects.toThrow('etapa 8C');
+    const rollbackProbe=db.createQueryRunner();await rollbackProbe.startTransaction();try{await expect(new DeliveryFulfillment1794400000000().down(rollbackProbe)).rejects.toThrow('etapa 8C');}finally{await rollbackProbe.rollbackTransaction();await rollbackProbe.release();}
     const freeSettings=await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','8b-free-settings').send({enabled:true,coverageDescription:'Centro',shippingFeeCents:0}).expect(200);
     const freeRequest=await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key','8b-free-request').send({configurationVersion:freeSettings.body.version,recipientName:'Cliente',phone:'099',address:'Direccion'}).expect(201);
     await request(http()).post(`/api/v1/admin/delivery-requests/${freeRequest.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-free-approve').send({}).expect(200);
@@ -820,6 +870,260 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')('Table access against isol
     await request(http()).post(`/api/v1/admin/orders/${winner.body.id}/cancel`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','8b-stock-cancel').send({expectedVersion:1,reason:'Liberar'}).expect(200);
 
 
+  });
+
+  it('reviews cancellation with guest privacy, withdrawal, permissions, idempotency and consumed stock',async()=>{
+    const f=await fixture();const guest=await guests.create({name:'Cancelacion'});
+    const participant=await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(guest.token)).set('Idempotency-Key','9a-participant').send({qrToken:f.qr.qrToken,alias:'Cancelacion'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${participant.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-participant-approve').expect(200);
+    const [cat]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('9A','9a') RETURNING id_categoria`);
+    const [prod]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'9a-product','Producto',500,false) RETURNING id_producto`,[cat.id_categoria]);
+    const order=await request(http()).post(`/api/v1/visits/${f.visit.id}/orders`).set('Authorization',auth(guest.token)).set('Idempotency-Key','9a-order').send({items:[{productId:prod.id_producto,quantity:1}]}).expect(201);
+    await request(http()).post(`/api/v1/admin/orders/${order.body.id}/start-preparation`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-prepare').send({expectedVersion:1}).expect(200);
+    const create=()=>request(http()).post(`/api/v1/me/orders/${order.body.id}/cancellation-requests`).set('Authorization',auth(guest.token)).set('Idempotency-Key','9a-create').send({expectedVersion:1,reason:'Cancelar'});
+    const r=await create().expect(201);expect((await create().expect(201)).body).toEqual(r.body);
+    await request(http()).get(`/api/v1/me/cancellation-requests/${r.body.id}`).set('Authorization',auth(tokens.client)).expect(404);
+    await request(http()).post(`/api/v1/admin/orders/${order.body.id}/ready`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-block').send({expectedVersion:1}).expect(409);
+    await request(http()).post(`/api/v1/admin/cancellation-requests/${r.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-worker').send({}).expect(403);
+    await request(http()).post(`/api/v1/me/cancellation-requests/${r.body.id}/withdraw`).set('Authorization',auth(guest.token)).set('Idempotency-Key','9a-withdraw').send({}).expect(200);
+    let second=await request(http()).post(`/api/v1/admin/orders/${order.body.id}/cancellation-requests`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-staff-create').send({expectedVersion:1,reason:'Cancelar'}).expect(201);
+    await request(http()).post(`/api/v1/me/cancellation-requests/${second.body.id}/withdraw`).set('Authorization',auth(guest.token)).set('Idempotency-Key','9a-staff-withdraw').send({}).expect(404);
+    await request(http()).post(`/api/v1/admin/cancellation-requests/${second.body.id}/reject`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9a-reject').send({reason:'Continuar'}).expect(200);
+    await request(http()).post(`/api/v1/admin/orders/${order.body.id}/ready`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-resume').send({expectedVersion:1}).expect(200);
+    second=await request(http()).post(`/api/v1/admin/orders/${order.body.id}/cancellation-requests`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-final-request').send({expectedVersion:1,reason:'Cancelar listo'}).expect(201);
+    const approve=()=>request(http()).post(`/api/v1/admin/cancellation-requests/${second.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9a-approve').send({});
+    await failAudit('cancellation.approve');try{await approve().expect(500);}finally{await restoreAudit();}
+    await approve().expect(200);await approve().expect(200);
+    const saved=await request(http()).get(`/api/v1/me/orders/${order.body.id}`).set('Authorization',auth(guest.token)).expect(200);expect(saved.body.status).toBe('cancelled');
+    await request(http()).get('/api/v1/admin/refunds').set('Authorization',auth(tokens.worker)).expect(200);
+  });
+
+  it('authorizes one complete delivery refund without returning money or consumed stock',async()=>{
+    const settings=await request(http()).put('/api/v1/admin/delivery/settings').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9a-paid-settings').send({enabled:true,coverageDescription:'Centro',shippingFeeCents:200}).expect(200);
+    const coverage=await request(http()).post('/api/v1/me/delivery-requests').set('Authorization',auth(tokens.client)).set('Idempotency-Key','9a-paid-coverage').send({configurationVersion:settings.body.version,recipientName:'Cliente',phone:'099',address:'Direccion'}).expect(201);
+    await request(http()).post(`/api/v1/admin/delivery-requests/${coverage.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-paid-coverage-approve').send({}).expect(200);
+    const [cat]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('9A pagado','9a pagado') RETURNING id_categoria`);
+    const [prod]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES ($1,'9a-paid','Producto',500,true) RETURNING id_producto`,[cat.id_categoria]);
+    await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,inicializado_por) VALUES ($1,$2,2,2,$3)`,[dayId,prod.id_producto,users.admin]);
+    const order=await request(http()).post(`/api/v1/me/delivery-requests/${coverage.body.id}/orders`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','9a-paid-order').send({items:[{productId:prod.id_producto,quantity:1}]}).expect(201);
+    const url=`/api/v1/me/orders/${order.body.id}/cancellation-requests`;
+    const ask=(key:string)=>request(http()).post(url).set('Authorization',auth(tokens.client)).set('Idempotency-Key',key).send({expectedVersion:1,reason:'Cancelar todo'});
+    await ask('9a-unpaid').expect(409);
+    const payment=await request(http()).post(`/api/v1/me/settlements/${order.body.settlement.id}/transfer-payments`).set('Authorization',auth(tokens.client)).set('Idempotency-Key','9a-paid-proof').attach('file',Buffer.from('%PDF-1.7 receipt'),{filename:'r.pdf',contentType:'application/pdf'}).expect(201);
+    await ask('9a-pending-proof').expect(409);
+    await request(http()).post(`/api/v1/admin/payments/${payment.body.id}/confirm`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-paid-confirm').send({bankOperationReference:'9A-PAID'}).expect(200);
+    await request(http()).post(`/api/v1/admin/orders/${order.body.id}/start-preparation`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9a-paid-prepare').send({expectedVersion:1}).expect(200);
+    const asks=await Promise.all([ask('9a-paid-request'),ask('9a-paid-duplicate')]);expect(asks.map(r=>r.status).sort()).toEqual([201,409]);const r=asks.find(x=>x.status===201)!;
+    const approve=(key:string)=>request(http()).post(`/api/v1/admin/cancellation-requests/${r.body.id}/approve`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key',key).send({});
+    await failAudit('cancellation.approve');try{await approve('9a-paid-fail').expect(500);}finally{await restoreAudit();}
+    const [rolled]=await db.query(`SELECT count(*)::int AS total FROM devolucion WHERE id_pedido=$1`,[order.body.id]);expect(rolled.total).toBe(0);
+    const approvals=await Promise.all([approve('9a-paid-approve'),approve('9a-paid-approve-other')]);expect(approvals.map(x=>x.status).sort()).toEqual([200,409]);
+    const approved=approvals.find(x=>x.status===200)!;expect(approved.body.refund.amountCents).toBe(700);
+    const [cancelledPoints]=await db.query('SELECT estado FROM acumulacion_puntos WHERE id_pago=$1',[payment.body.id]);expect(cancelledPoints.estado).toBe('cancelled');
+    const refundId=approved.body.refund.id;
+    const refund=await request(http()).get(`/api/v1/me/refunds/${refundId}`).set('Authorization',auth(tokens.client)).expect(200);expect(refund.body.amountCents).toBe(700);expect(refund.body.status).toBe('pending');
+    const outsider=await guests.create({name:'Otro'});await request(http()).get(`/api/v1/me/refunds/${refundId}`).set('Authorization',auth(outsider.token)).expect(404);
+    await request(http()).get(`/api/v1/admin/refunds?orderId=${order.body.id}&paymentId=${payment.body.id}&limit=1`).set('Authorization',auth(tokens.worker)).expect(200);
+    const executeUrl=`/api/v1/admin/refunds/${refundId}/execute`;
+    await request(http()).post(executeUrl).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','9b-worker-denied').send({method:'transfer',bankOperationReference:'DEV-000123'}).expect(403);
+    const execute=()=>request(http()).post(executeUrl).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-transfer').send({method:'transfer',bankOperationReference:' dev-000123 ',notes:'Transferencia ejecutada'});
+    await failAudit('refund.completed');try{await execute().expect(500);}finally{await restoreAudit();}
+    expect((await request(http()).get(`/api/v1/me/refunds/${refundId}`).set('Authorization',auth(tokens.client)).expect(200)).body.status).toBe('pending');
+    const completed=await execute().expect(200);expect(completed.body.status).toBe('completed');expect(completed.body.method).toBe('transfer');expect(completed.body.bankOperationReference).toBe('DEV-000123');expect(completed.body.history.map((x:{event:string})=>x.event)).toEqual(['refund.authorized','refund.completed']);
+    expect((await execute().expect(200)).body).toEqual(completed.body);
+    await request(http()).post(executeUrl).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-transfer-another-key').send({method:'transfer',bankOperationReference:'DEV-000123'}).expect(409);
+    const privateRefund=(await request(http()).get(`/api/v1/me/refunds/${refundId}`).set('Authorization',auth(tokens.client)).expect(200)).body;expect(privateRefund.status).toBe('completed');expect(privateRefund.method).toBe('transfer');expect(privateRefund).not.toHaveProperty('bankOperationReference');expect(privateRefund.refundedCents).toBe(700);
+    const account=await request(http()).get(`/api/v1/me/accounts/${order.body.accountId}`).set('Authorization',auth(tokens.client)).expect(200);expect(account.body.status).toBe('closed');expect(account.body.paidCents).toBe(700);expect(account.body.refundPendingCents).toBe(0);expect(account.body.refundedCents).toBe(700);expect(account.body.pendingCents).toBe(0);
+    await request(http()).get(`/api/v1/admin/operations/cash/${(await db.query('SELECT id_caja FROM caja WHERE id_jornada=$1',[dayId]))[0].id_caja}/summary`).set('Authorization',auth(tokens.worker)).expect(200);
+    const [stock]=await db.query('SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',[prod.id_producto]);expect(stock).toEqual({cantidad_fisica:1,cantidad_reservada:0});
+    const [saved]=await db.query(`SELECT p.estado AS payment,l.estado AS settlement FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion WHERE p.id_pago=$1`,[payment.body.id]);expect(saved).toEqual({payment:'confirmed',settlement:'settled'});
+    const runner=db.createQueryRunner();await runner.connect();await runner.startTransaction();try{await expect(new ExecuteRefunds1794600000000().down(runner)).rejects.toThrow('devoluciones ejecutadas o con historial');}finally{await runner.rollbackTransaction();await runner.release();}
+  });
+
+  it('returns cash once from the current register and serializes competing refunds',async()=>{
+    const [cash] = await db.query(`SELECT id_caja FROM caja WHERE id_jornada=$1`,[dayId]);
+    const amount = 1250;
+    await db.query(`UPDATE caja SET monto_inicial_ctvs=$2 WHERE id_caja=$1`,[cash.id_caja,amount]);
+    const refunds = [await createCashRefundFixture(1,amount),await createCashRefundFixture(2,amount)];
+    const refundUrl=`/api/v1/admin/refunds/${refunds[0]}/execute`;
+    await request(http()).post(refundUrl).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-internal-field').send({method:'cash',recipientName:'Persona',methodFields:'injected'}).expect(400);
+    await request(http()).post(refundUrl).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-invalid-amount').send({method:'cash',recipientName:'Persona',amountCents:amount}).expect(400);
+    await request(http()).post(refundUrl).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-incompatible-fields').send({method:'cash',recipientName:'Persona',bankOperationReference:'REF'}).expect(400);
+    await request(http()).post(refundUrl).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-missing-reference').send({method:'transfer'}).expect(400);
+    await request(http()).post(`/api/v1/admin/refunds/${refunds[0]}/execute`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-duplicate-bank-ref').send({method:'transfer',bankOperationReference:'DEV-000123'}).expect(409);
+    const execute = (id:string,key:string) => request(http()).post(`/api/v1/admin/refunds/${id}/execute`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key',key).send({method:'cash',recipientName:' Persona beneficiaria ',notes:'Entrega registrada'});
+    const results = await Promise.all([execute(refunds[0],'9b-cash-race-1'),execute(refunds[1],'9b-cash-race-2')]);
+    expect(results.map(result=>result.status).sort()).toEqual([200,409]);
+    const success = results.find(result=>result.status===200)!;
+    expect(success.body.status).toBe('completed');expect(success.body.method).toBe('cash');expect(success.body.recipientName).toBe('Persona beneficiaria');expect(success.body.cashRegisterId).toBe(cash.id_caja);
+    const [balance] = await db.query(`SELECT c.monto_inicial_ctvs::int AS opening,COALESCE(sum(s.importe_ctvs),0)::float8 AS refunds FROM caja c LEFT JOIN salida_caja_devolucion s ON s.id_caja=c.id_caja WHERE c.id_caja=$1 GROUP BY c.id_caja`,[cash.id_caja]);
+    expect(balance.opening-balance.refunds).toBe(0);
+    const summary = await request(http()).get(`/api/v1/admin/operations/cash/${cash.id_caja}/summary`).set('Authorization',auth(tokens.worker)).expect(200);
+    expect(summary.body.cashRefundsCents).toBe(amount);expect(summary.body.balanceCents).toBe(summary.body.openingCents+summary.body.cashIncomeCents-amount);
+    const own = await request(http()).get(`/api/v1/me/refunds/${success.body.id}`).set('Authorization',auth(tokens.client)).expect(200);
+    expect(own.body.method).toBe('cash');expect(own.body).not.toHaveProperty('recipientName');expect(own.body).not.toHaveProperty('cashRegisterId');
+    await request(http()).post(`/api/v1/admin/refunds/${success.body.id}/execute`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-cash-replay-other-key').send({method:'cash',recipientName:'Persona'}).expect(409);
+    await request(http()).get(`/api/v1/admin/refunds/${success.body.id}`).set('Authorization',auth(tokens.worker)).expect(200).then(response=>expect(response.body.history.map((entry:{event:string})=>entry.event)).toEqual(['refund.authorized','refund.completed']));
+    const pendingId=refunds.find(id=>id!==success.body.id)!;
+    await db.query(`UPDATE caja SET estado='closed' WHERE id_caja=$1`,[cash.id_caja]);
+    await db.query(`UPDATE jornada_operativa SET estado='closed' WHERE id_jornada=$1`,[dayId]);
+    try {
+      await execute(pendingId,'9b-closed-cash').expect(409);
+      const transfer=await request(http()).post(`/api/v1/admin/refunds/${pendingId}/execute`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','9b-transfer-closed-day').send({method:'transfer',bankOperationReference:'9B-CLOSED-DAY'}).expect(200);
+      expect(transfer.body.method).toBe('transfer');
+      const after=await request(http()).get(`/api/v1/admin/operations/cash/${cash.id_caja}/summary`).set('Authorization',auth(tokens.worker)).expect(200);
+      expect(after.body.balanceCents).toBe(summary.body.balanceCents);
+      expect(after.body.cashRefundsCents).toBe(amount);
+    } finally {
+      await db.query(`UPDATE caja SET estado='open' WHERE id_caja=$1`,[cash.id_caja]);
+      await db.query(`UPDATE jornada_operativa SET estado='open' WHERE id_jornada=$1`,[dayId]);
+    }
+  });
+
+  it('reserves points and inventory for a registered-client reward, then transfers and resolves the reservation',async()=>{
+    const f=await fixture();
+    const [rewardUser]=await db.query(`INSERT INTO usuario(id_rol,correo_normalizado,password_hash) SELECT id_rol,$1,'unused' FROM rol WHERE codigo='client' RETURNING id_usuario id`,[`10b-${randomUUID()}@test.invalid`]);
+    await db.query('INSERT INTO perfil(id_usuario,nombres) VALUES($1,\'Canje\')',[rewardUser.id]);
+    const [rewardClient]=await db.query('INSERT INTO cliente(id_usuario) VALUES($1) RETURNING id_cliente id',[rewardUser.id]);
+    const [rewardSession]=await db.query(`INSERT INTO sesion_usuario(id_usuario,refresh_hash,expira_en) VALUES($1,$2,now()+interval '1 day') RETURNING id_sesion_usuario id`,[rewardUser.id,hashAccessSecret(randomUUID())]);
+    const rewardToken=await app.get(JwtService).signAsync({sub:rewardUser.id,sid:rewardSession.id,av:0});
+    await request(http()).post(`/api/v1/visits/${f.visit.id}/participants`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-client-join').send({qrToken:f.qr.qrToken,alias:'Canje'}).expect(201);
+    const [participant]=await db.query(`SELECT id_participante id FROM participante WHERE id_visita=$1 AND id_cliente=$2`,[f.visit.id,rewardClient.id]);
+    await request(http()).post(`/api/v1/admin/participants/${participant.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-client-approve').send({}).expect(200);
+    const [account]=await db.query('SELECT id_cuenta id FROM cuenta_consumo WHERE id_participante=$1',[participant.id]);
+    const [cash]=await db.query(`INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES($1,0,$2) ON CONFLICT(id_jornada) DO UPDATE SET estado='open' RETURNING id_caja id`,[dayId,users.admin]);
+    const [bill]=await db.query(`INSERT INTO liquidacion(id_cuenta,id_caja,estado,productos_ctvs,envio_ctvs,total_ctvs,creada_por,cerrada_en,cerrada_por,resolucion) VALUES($1,$2,'settled',1000,0,1000,$3,now(),$3,'cash') RETURNING id_liquidacion id`,[account.id,cash.id,users.admin]);
+    const [payment]=await db.query(`INSERT INTO pago(id_liquidacion,metodo,estado,importe_ctvs,recibido_ctvs,cambio_ctvs,registrado_usuario) VALUES($1,'cash','confirmed',1000,1000,0,$2) RETURNING id_pago id`,[bill.id,users.admin]);
+    const [config]=await db.query('SELECT id_configuracion id FROM configuracion_puntos ORDER BY version DESC LIMIT 1');
+    const [accrual]=await db.query(`INSERT INTO acumulacion_puntos(id_pago,id_cliente,id_configuracion,productos_ctvs,puntos,estado,acreditada_en) VALUES($1,$2,$3,1000,200,'credited',now()) RETURNING id_acumulacion id`,[payment.id,rewardClient.id,config.id]);
+    await db.query(`INSERT INTO movimiento_puntos(id_cliente,id_acumulacion,tipo,puntos) VALUES($1,$2,'earn',200)`,[rewardClient.id,accrual.id]);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES('10B reward','10b reward') RETURNING id_categoria id`);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES($1,'10b-reward','Producto premio',500,true) RETURNING id_producto id`,[category.id]);
+    await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,inicializado_por) VALUES($1,$2,2,2,$3)`,[dayId,product.id,users.admin]);
+    await failAudit('reward.created');try{await request(http()).post('/api/v1/admin/rewards').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','10b-create-reward').send({name:'Producto gratis',productId:product.id,pointsCost:50,active:true,sortOrder:1}).expect(500);}finally{await restoreAudit();}
+    const createdReward=await request(http()).post('/api/v1/admin/rewards').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','10b-create-reward').send({name:'Producto gratis',productId:product.id,pointsCost:50,active:true,sortOrder:1}).expect(201);
+    const rewardId=createdReward.body.id;
+    const changed=await request(http()).patch(`/api/v1/admin/rewards/${rewardId}`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','10b-update-reward').send({expectedVersion:1,name:'Producto gratis actualizado'}).expect(200);
+    expect(changed.body.version).toBe(2);
+    const [updateRecord]=await db.query("SELECT recurso_id FROM idempotencia WHERE clave='10b-update-reward'");expect(updateRecord.recurso_id).toBe(rewardId);
+    await request(http()).patch(`/api/v1/admin/rewards/${rewardId}`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','10b-stale-update').send({expectedVersion:1,name:'Cambio desactualizado'}).expect(409);
+
+    await request(http()).get('/api/v1/rewards').expect(200);
+    const guest=await guests.create({name:'Sin puntos'});
+    await request(http()).get('/api/v1/me/redemptions').set('Authorization',auth(guest.token)).expect(401);
+    await request(http()).get(`/api/v1/me/redemptions/${randomUUID()}`).set('Authorization',auth(guest.token)).expect(401);
+    await request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(guest.token)).set('Idempotency-Key','10b-guest-denied').send({rewardId,rewardVersion:2}).expect(401);
+    const create=()=>request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-create-redemption').send({rewardId,rewardVersion:2});
+    await failAudit('redemption.requested');try{await create().expect(500);}finally{await restoreAudit();}
+    const redemption=await create().expect(201);expect((await create().expect(201)).body).toEqual(redemption.body);
+    expect((await request(http()).get('/api/v1/me/points').set('Authorization',auth(rewardToken))).body).toMatchObject({balance:200,reservedPoints:50,availablePoints:150});
+    const [reserved]=await db.query('SELECT cantidad_fisica physical,cantidad_reservada reserved FROM inventario_diario WHERE id_producto=$1',[product.id]);expect(reserved).toEqual({physical:2,reserved:1});
+    const approve=(key:string)=>request(http()).post(`/api/v1/admin/redemptions/${redemption.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key',key).send({});
+    const approvalRace=await Promise.all([approve('10b-approve-redemption-1'),approve('10b-approve-redemption-2')]);
+    expect(approvalRace.map(x=>x.status).sort()).toEqual([200,409]);
+    const approvedResponse=approvalRace.find(x=>x.status===200)!;const approved=approvedResponse.body;
+    const approvalReplay=await approve('10b-approve-redemption-1');if(approvalReplay.status===200)expect(approvalReplay.body).toEqual(approved);else expect((await approve('10b-approve-redemption-2')).body).toEqual(approved);
+    expect((await request(http()).get('/api/v1/me/points').set('Authorization',auth(rewardToken))).body).toMatchObject({balance:150,reservedPoints:0,availablePoints:150});
+    const rewardOrderId=approved.orderId;
+    expect(rewardOrderId).toBeTruthy();
+    const [transferred]=await db.query(`SELECT i.cantidad_fisica physical,i.cantidad_reservada reserved,r.estado FROM inventario_diario i JOIN reserva_inventario_canje r ON r.id_inventario=i.id_inventario WHERE i.id_producto=$1`,[product.id]);expect(transferred).toEqual({physical:2,reserved:1,estado:'transferred'});
+    await request(http()).post(`/api/v1/admin/orders/${rewardOrderId}/start-preparation`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-prepare-order').send({expectedVersion:1}).expect(200);
+    const [consumed]=await db.query('SELECT cantidad_fisica physical,cantidad_reservada reserved FROM inventario_diario WHERE id_producto=$1',[product.id]);expect(consumed).toEqual({physical:1,reserved:0});
+    await request(http()).post(`/api/v1/admin/orders/${rewardOrderId}/ready`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-ready-order').send({expectedVersion:1}).expect(200);
+    await request(http()).post(`/api/v1/admin/orders/${rewardOrderId}/deliver`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-deliver-order').send({expectedVersion:1}).expect(200);
+    await request(http()).get(`/api/v1/me/redemptions/${redemption.body.id}`).set('Authorization',auth(rewardToken)).expect(200);
+    await request(http()).get('/api/v1/me/points/movements?type=redeem').set('Authorization',auth(rewardToken)).expect(200);
+    const noStockProduct=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES($1,'10b-reward-no-stock','Producto sin stock',0,false) RETURNING id_producto id`,[category.id]);
+    const secondReward=(await request(http()).post('/api/v1/admin/rewards').set('Authorization',auth(tokens.admin)).set('Idempotency-Key','10b-create-reward-no-stock').send({name:'Premio sin stock',productId:noStockProduct[0].id,pointsCost:50,active:true,sortOrder:2}).expect(201)).body;
+    const second=(await request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-second-redemption').send({rewardId:secondReward.id,rewardVersion:1}).expect(201)).body;
+    const secondApproved=(await request(http()).post(`/api/v1/admin/redemptions/${second.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-second-approve').send({}).expect(200)).body;
+    await request(http()).post(`/api/v1/me/orders/${secondApproved.orderId}/cancel`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-reward-order-cancel').send({expectedVersion:1,reason:'Prueba de reintegro'}).expect(200);
+    expect((await request(http()).get('/api/v1/me/points').set('Authorization',auth(rewardToken))).body).toMatchObject({balance:150,reservedPoints:0,availablePoints:150});
+    const pending=(await request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-third-redemption').send({rewardId:secondReward.id,rewardVersion:1}).expect(201)).body;
+    expect((await request(http()).get('/api/v1/me/points').set('Authorization',auth(rewardToken))).body.reservedPoints).toBe(50);
+    await request(http()).post(`/api/v1/me/redemptions/${pending.id}/cancel`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-cancel-pending').send({}).expect(200);
+    const rejected=(await request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-rejected-redemption').send({rewardId:secondReward.id,rewardVersion:1}).expect(201)).body;
+    await request(http()).post(`/api/v1/admin/redemptions/${rejected.id}/reject`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-reject-redemption').send({reason:'No procede'}).expect(200);
+    const expiring=(await request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-expiring-redemption').send({rewardId:secondReward.id,rewardVersion:1}).expect(201)).body;
+    await db.query(`UPDATE solicitud_canje SET expira_en=clock_timestamp()-interval '1 second' WHERE id_canje=$1`,[expiring.id]);
+    await app.get(RewardsService).expirePending();
+    expect((await request(http()).get(`/api/v1/me/redemptions/${expiring.id}`).set('Authorization',auth(rewardToken))).body.status).toBe('expired');
+    const pendingAtPayment=(await request(http()).post(`/api/v1/visits/${f.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-pending-at-payment').send({rewardId:secondReward.id,rewardVersion:1}).expect(201)).body;
+    const zeroBill=(await request(http()).post(`/api/v1/admin/accounts/${account.id}/settlements`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-zero-settlement').send({}).expect(201)).body;
+    expect(zeroBill.totalCents).toBe(0);
+    await request(http()).post(`/api/v1/admin/settlements/${zeroBill.id}/complete-without-payment`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-zero-close').send({}).expect(200);
+
+    expect((await request(http()).get(`/api/v1/me/redemptions/${pendingAtPayment.id}`).set('Authorization',auth(rewardToken)).expect(200)).body.status).toBe('cancelled');
+    const exitVisit=await fixture();
+    const joined=await request(http()).post(`/api/v1/visits/${exitVisit.visit.id}/participants`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-exit-join').send({qrToken:exitVisit.qr.qrToken,alias:'Salida'}).expect(201);
+    await request(http()).post(`/api/v1/admin/participants/${joined.body.id}/approve`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','10b-exit-approve').send({}).expect(200);
+    const exitRequest=await request(http()).post(`/api/v1/visits/${exitVisit.visit.id}/redemptions`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-exit-request').send({rewardId:secondReward.id,rewardVersion:1}).expect(201);
+    await request(http()).post(`/api/v1/me/participants/${joined.body.id}/leave`).set('Authorization',auth(rewardToken)).set('Idempotency-Key','10b-exit-leave').send({}).expect(200);
+    expect((await request(http()).get(`/api/v1/me/redemptions/${exitRequest.body.id}`).set('Authorization',auth(rewardToken)).expect(200)).body.status).toBe('cancelled');
+    const runner=db.createQueryRunner();await runner.connect();await runner.startTransaction();try{await expect(new LocalRewards1794800000000().down(runner)).rejects.toThrow('existen recompensas');}finally{await runner.rollbackTransaction();await runner.release();}
+  });
+
+  it('previews and closes an old cash register once, requiring a reason for discrepancies',async()=>{
+    const oldDay='2020-01-01';
+    const [day]=await db.query(`INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES($1,$2) RETURNING id_jornada id`,[oldDay,users.admin]);
+    const [cash]=await db.query(`INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES($1,1000,$2) RETURNING id_caja id`,[day.id,users.admin]);
+    const [table]=await db.query('INSERT INTO mesa(codigo) VALUES($1) RETURNING id_mesa id',[`11A-${randomUUID()}`]);
+    const [visit]=await db.query('INSERT INTO visita_mesa(id_mesa,id_jornada,abierta_por) VALUES($1,$2,$3) RETURNING id_visita id',[table.id,day.id,users.admin]);
+    const [closureClientUser]=await db.query(`INSERT INTO usuario(id_rol,correo_normalizado,password_hash) SELECT id_rol,$1,'unused' FROM rol WHERE codigo='client' RETURNING id_usuario id`,[`11a-${randomUUID()}@test.invalid`]);
+    await db.query(`INSERT INTO perfil(id_usuario,nombres) VALUES($1,'Cliente cierre')`,[closureClientUser.id]);
+    const [client]=await db.query('INSERT INTO cliente(id_usuario) VALUES($1) RETURNING id_cliente id',[closureClientUser.id]);
+    const [participant]=await db.query(`INSERT INTO participante(id_visita,id_cliente,alias,estado,qr_version_aprobada,aprobada_por,aprobada_en) VALUES($1,$2,'Cierre','approved',1,$3,now()) RETURNING id_participante id`,[visit.id,client.id,users.admin]);
+    const [account]=await db.query(`INSERT INTO cuenta_consumo(id_cliente,id_participante,id_jornada) VALUES($1,$2,$3) RETURNING id_cuenta id`,[client.id,participant.id,day.id]);
+    const [bill]=await db.query(`INSERT INTO liquidacion(id_cuenta,id_caja,productos_ctvs,total_ctvs,creada_por) VALUES($1,$2,0,0,$3) RETURNING id_liquidacion id`,[account.id,cash.id,users.admin]);
+    const [category]=await db.query(`INSERT INTO categoria(nombre,nombre_normalizado) VALUES($1,$2) RETURNING id_categoria id`,[`11A ${randomUUID()}`,`11a-${randomUUID()}`]);
+    const [product]=await db.query(`INSERT INTO producto(id_categoria,sku,nombre,precio_ctvs,controla_inventario) VALUES($1,$2,'Premio',0,false) RETURNING id_producto id`,[category.id,`11a-${randomUUID()}`]);
+    const [reward]=await db.query(`INSERT INTO recompensa(nombre,id_producto,costo_puntos) VALUES('Canje pendiente',$1,10) RETURNING id_recompensa id`,[product.id]);
+    const [redemption]=await db.query(`INSERT INTO solicitud_canje(id_cliente,id_participante,id_cuenta,id_visita,id_jornada,id_recompensa,version_recompensa,id_producto,controla_stock,costo_puntos,expira_en,creado_por) VALUES($1,$2,$3,$4,$5,$6,1,$7,false,10,now()+interval '15 minutes',$8) RETURNING id_canje id`,[client.id,participant.id,account.id,visit.id,day.id,reward.id,product.id,users.client]);
+    await db.query(`INSERT INTO reserva_puntos_canje(id_canje,id_cliente,puntos) VALUES($1,$2,10)`,[redemption.id,client.id]);
+    const preview=()=>request(http()).get(`/api/v1/admin/operations/cash/${cash.id}/closing-preview`).set('Authorization',auth(tokens.worker));
+    await preview().expect(200).then(r=>expect(r.body).toMatchObject({canClose:false,expectedCents:1000,blockers:{pendingSettlements:{total:1}}}));
+    await request(http()).post(`/api/v1/admin/operations/cash/${cash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-blocked').send({countedCents:1000}).expect(409);
+    await db.query('UPDATE liquidacion SET productos_ctvs=100,total_ctvs=100 WHERE id_liquidacion=$1',[bill.id]);
+    const [pendingTransfer]=await db.query(`INSERT INTO pago(id_liquidacion,metodo,estado,importe_ctvs,registrado_usuario,pagador_cliente) VALUES($1,'transfer','pendingVerification',100,$2,$3) RETURNING id_pago id`,[bill.id,users.admin,client.id]);
+    await preview().expect(200).then(r=>expect(r.body.blockers.pendingTransfers).toMatchObject({total:1,items:[{id:pendingTransfer.id,reason:expect.any(String)}]}));
+    await db.query(`UPDATE pago SET estado='rejected',verificado_por=$2,verificado_en=now(),motivo_rechazo='Prueba' WHERE id_pago=$1`,[pendingTransfer.id,users.admin]);
+    await db.query(`UPDATE liquidacion SET estado='cancelled',anulada_por=$2,anulada_en=now(),motivo_anulacion='Prueba' WHERE id_liquidacion=$1`,[bill.id,users.admin]);
+    const [blockedOrder]=await db.query(`INSERT INTO pedido(id_jornada,id_visita,id_cuenta,actor_usuario) VALUES($1,$2,$3,$4) RETURNING id_pedido id`,[day.id,visit.id,account.id,users.admin]);
+    const [blockedVersion]=await db.query(`INSERT INTO version_pedido(id_pedido,numero,estado,total_productos_ctvs) VALUES($1,1,'current',0) RETURNING id_version id`,[blockedOrder.id]);
+    const [blockedDetail]=await db.query(`INSERT INTO detalle_pedido(id_version,id_producto,cantidad,precio_unitario_ctvs,controla_stock_snapshot) VALUES($1,$2,1,0,true) RETURNING id_detalle id`,[blockedVersion.id,product.id]);
+    await db.query(`INSERT INTO asignacion_consumo(id_detalle,id_cuenta,cantidad) VALUES($1,$2,1)`,[blockedDetail.id,account.id]);
+    const [blockedInventory]=await db.query(`INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,cantidad_reservada,inicializado_por) VALUES($1,$2,1,1,1,$3) RETURNING id_inventario id`,[day.id,product.id,users.admin]);
+    await db.query(`INSERT INTO reserva_inventario(id_detalle,id_inventario,cantidad) VALUES($1,$2,1)`,[blockedDetail.id,blockedInventory.id]);
+    await preview().expect(200).then(r=>expect(r.body).toMatchObject({canClose:false,blockers:{unsettledLocalConsumption:{total:1},activeOrderReservations:{total:1}}}));
+    await request(http()).post(`/api/v1/admin/operations/cash/${cash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-consumption-blocked').send({countedCents:1000}).expect(409);
+    await db.query(`UPDATE asignacion_consumo SET estado='superseded' WHERE id_detalle=$1`,[blockedDetail.id]);
+    await db.query(`UPDATE reserva_inventario SET estado='released',resuelta_en=now() WHERE id_detalle=$1`,[blockedDetail.id]);
+    await db.query(`UPDATE inventario_diario SET cantidad_reservada=0 WHERE id_inventario=$1`,[blockedInventory.id]);
+    await db.query(`UPDATE pedido SET estado='cancelled' WHERE id_pedido=$1`,[blockedOrder.id]);
+    await preview().expect(200).then(r=>expect(r.body).toMatchObject({canClose:true,expectedCents:1000,cashIncomeCents:0,cashRefundsCents:0}));
+    await request(http()).post(`/api/v1/admin/operations/cash/${cash.id}/close`).set('Authorization',auth(tokens.worker)).set('Idempotency-Key','11a-worker-denied').send({countedCents:900,reason:'Faltante'}).expect(403);
+    await request(http()).post(`/api/v1/admin/operations/cash/${cash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-no-reason').send({countedCents:900}).expect(400);
+    const close=()=>request(http()).post(`/api/v1/admin/operations/cash/${cash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-cash-close').send({countedCents:900,reason:'Diferencia comprobada'});
+    await failAudit('operations.cash_closed');try{await close().expect(500);}finally{await restoreAudit();}
+    const [rolled]=await db.query('SELECT estado FROM caja WHERE id_caja=$1',[cash.id]);expect(rolled.estado).toBe('open');
+    const [redemptionRolled]=await db.query('SELECT estado FROM solicitud_canje WHERE id_canje=$1',[redemption.id]);expect(redemptionRolled.estado).toBe('pending');
+    const closeRace=await Promise.all([close(),close()]);expect(closeRace.map(r=>r.status)).toEqual([200,200]);
+    const closure=closeRace[0];expect(closure.body).toMatchObject({cashRegisterId:cash.id,openingCents:1000,cashIncomeCents:0,cashRefundsCents:0,expectedCents:1000,countedCents:900,differenceCents:-100,reason:'Diferencia comprobada'});
+    expect(closeRace[1].body).toEqual(closure.body);
+    const [releasedRedemption]=await db.query(`SELECT s.estado,r.estado reserva FROM solicitud_canje s JOIN reserva_puntos_canje r ON r.id_canje=s.id_canje WHERE s.id_canje=$1`,[redemption.id]);expect(releasedRedemption).toEqual({estado:'cancelled',reserva:'released'});
+    const [redemptionHistory]=await db.query(`SELECT evento FROM historial_canje WHERE id_canje=$1`,[redemption.id]);expect(redemptionHistory.evento).toBe('redemption.cash_closed');
+    await request(http()).post(`/api/v1/admin/operations/cash/${cash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-second-close').send({countedCents:900,reason:'Otro intento'}).expect(409);
+    await request(http()).get(`/api/v1/admin/operations/cash/${cash.id}/closure`).set('Authorization',auth(tokens.worker)).expect(200).then(r=>expect(r.body.id).toBe(closure.body.id));
+    await request(http()).get('/api/v1/admin/operations/cash?status=closed&operatingDayId='+day.id).set('Authorization',auth(tokens.worker)).expect(200).then(r=>expect(r.body.items[0].id).toBe(cash.id));
+    await expect(db.query('UPDATE cierre_caja SET contado_ctvs=1000 WHERE id_caja=$1',[cash.id])).rejects.toThrow('inmutable');
+    await expect(db.query('UPDATE caja SET estado=\'open\' WHERE id_caja=$1',[cash.id])).rejects.toThrow('no puede modificarse');
+    const runner=db.createQueryRunner();await runner.connect();await runner.startTransaction();try{await expect(new CashRegisterClosures1794900000000().down(runner)).rejects.toThrow('existen cierres de caja');}finally{await runner.rollbackTransaction();await runner.release();}
+    const [exactDay]=await db.query(`INSERT INTO jornada_operativa(fecha_operativa,abierta_por) VALUES('2020-01-02',$1) RETURNING id_jornada id`,[users.admin]);
+    const [exactCash]=await db.query(`INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES($1,0,$2) RETURNING id_caja id`,[exactDay.id,users.admin]);
+    for (const countedCents of [null,false,'', '0',-1,0.5,Number.MAX_SAFE_INTEGER+1]) {
+      await request(http()).post(`/api/v1/admin/operations/cash/${exactCash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-invalid-count').send({countedCents}).expect(400);
+    }
+    await request(http()).post(`/api/v1/admin/operations/cash/${exactCash.id}/close`).set('Authorization',auth(tokens.admin)).set('Idempotency-Key','11a-exact-close').send({countedCents:0}).expect(200).then(r=>expect(r.body).toMatchObject({expectedCents:0,countedCents:0,differenceCents:0,reason:null}));
   });
 
 });

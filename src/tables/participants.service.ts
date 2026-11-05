@@ -6,6 +6,7 @@ import { hashAccessSecret } from './guest-sessions.service.js';
 import { ParticipationIdempotencyService } from './participation-idempotency.service.js';
 import { auditTableOperation, type TableActor } from './table-audit.js';
 import { lockActiveVisit, lockTableOperations } from './table-operations.js';
+import { RewardsService } from '../rewards/rewards.service.js';
 
 const participantColumns = `p."id_participante" AS id,p."id_visita" AS "visitId",p."id_cliente" AS "clientId",
  p."alias",p."estado" AS status,p."qr_version_aprobada" AS "requestedQrVersion",p."solicitada_en" AS "requestedAt",
@@ -14,7 +15,7 @@ const participantColumns = `p."id_participante" AS id,p."id_visita" AS "visitId"
 
 @Injectable()
 export class ParticipantsService {
-  constructor(private readonly db: DataSource, private readonly idempotency: ParticipationIdempotencyService) {}
+  constructor(private readonly db: DataSource, private readonly idempotency: ParticipationIdempotencyService, private readonly rewards: RewardsService) {}
 
   async authenticate(manager: EntityManager, actor: ClientIdentity, participantId?: string) {
     const rows = actor.guestSessionId
@@ -106,6 +107,7 @@ export class ParticipantsService {
       } else {
         if (mode === 'reject' && p.estado !== 'pending' || mode === 'finish' && p.estado !== 'approved' || mode === 'leave' && !['pending','approved'].includes(p.estado)) throw new ConflictException('Transición de participación no permitida.');
         const next = mode === 'reject' ? 'rejected' : p.estado === 'pending' ? 'cancelled' : 'finished';
+        await this.rewards.releaseForParticipant(m, id);
         if (next === 'finished') await this.assertAccountsEmpty(m, 'p."id_participante"=$1', id);
         await m.query(`UPDATE "participante" SET "estado"=$2,"finalizada_en"=clock_timestamp(),"motivo_rechazo"=$3 WHERE "id_participante"=$1`, [id, next, reason ?? null]);
         if (next === 'finished') await m.query(`UPDATE "cuenta_consumo" SET "estado"='closed',"cerrada_en"=clock_timestamp() WHERE "id_participante"=$1 AND "estado"='open'`, [id]);
@@ -130,6 +132,7 @@ export class ParticipantsService {
     return this.idempotency.run(actor, `visits/${id.toLowerCase()}/close`, key, {}, 200, 'visita_mesa', async () => {}, async m => {
       await lockTableOperations(m); const ref = await this.lockVisit(m, id);
       const participants = await m.query(`SELECT "id_participante" AS id,"estado" AS status FROM "participante" WHERE "id_visita"=$1 AND "estado" IN ('pending','approved') ORDER BY "id_cliente","id_participante" FOR UPDATE`, [id]);
+      await this.rewards.releaseForVisit(m, id);
       await this.assertAccountsEmpty(m, 'p."id_visita"=$1', id);
       await m.query(`UPDATE "cuenta_consumo" SET "estado"='closed',"cerrada_en"=clock_timestamp() WHERE "id_participante" IN (SELECT "id_participante" FROM "participante" WHERE "id_visita"=$1 AND "estado"='approved') AND "estado"='open'`, [id]);
       await m.query(`UPDATE "participante" SET "estado"=CASE WHEN "estado"='pending' THEN 'cancelled' ELSE 'finished' END,"finalizada_en"=clock_timestamp() WHERE "id_visita"=$1 AND "estado" IN ('pending','approved')`, [id]);
