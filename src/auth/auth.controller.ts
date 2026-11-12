@@ -17,15 +17,16 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { AuthService } from './auth.service.js';
 import { AuthAccessGuard } from './auth-access.guard.js';
+import { AuthService } from './auth.service.js';
+import { type AuthenticatedRequestContext } from './auth.types.js';
 import { CurrentUserContext } from './current-user.decorator.js';
-import type { AuthenticatedRequestContext } from './auth.types.js';
-import { RegisterDto } from './dto/register.dto.js';
+import { AuthTokensDto } from './dto/auth-tokens.dto.js';
+import { AuthUserDto } from './dto/auth-user.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
-import { AuthTokensDto, AuthUserDto } from './dto/auth-response.dto.js';
-import { ChangePasswordDto } from './dto/change-password.dto.js';
+import { RegisterDto } from './dto/register.dto.js';
 
 @ApiTags('Autenticación')
 @Controller('auth')
@@ -39,7 +40,10 @@ export class AuthController {
   @ApiOperation({ summary: 'Registra un cliente e inicia su sesión.' })
   @ApiCreatedResponse({ type: AuthTokensDto })
   @ApiResponse({ status: 400, description: 'Datos inválidos.' })
-  @ApiResponse({ status: 409, description: 'Ya existe una cuenta con ese correo.' })
+  @ApiResponse({
+    status: 409,
+    description: 'Ya existe una cuenta con ese correo.',
+  })
   register(@Body() dto: RegisterDto) {
     return this.auth.register(dto);
   }
@@ -69,7 +73,10 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Revoca la sesión asociada al refresh token.' })
-  @ApiResponse({ status: 204, description: 'Sesión revocada o token desconocido.' })
+  @ApiResponse({
+    status: 204,
+    description: 'Sesión revocada o token desconocido.',
+  })
   async logout(@Body() dto: RefreshTokenDto): Promise<void> {
     await this.auth.logout(dto.refreshToken);
   }
@@ -77,9 +84,13 @@ export class AuthController {
   @Get('me')
   @UseGuards(AuthAccessGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Devuelve la identidad asociada al token de acceso.' })
+  @ApiOperation({
+    summary: 'Devuelve la identidad asociada al token de acceso.',
+  })
   @ApiOkResponse({ type: AuthUserDto })
-  @ApiUnauthorizedResponse({ description: 'JWT o sesión inválida, vencida o revocada.' })
+  @ApiUnauthorizedResponse({
+    description: 'JWT o sesión inválida, vencida o revocada.',
+  })
   getMe(@CurrentUserContext() current: AuthenticatedRequestContext) {
     return this.auth.getMe(current.userId);
   }
@@ -88,9 +99,21 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthAccessGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Cambia la contraseña y revoca todas las sesiones.' })
-  @ApiResponse({ status: 204, description: 'Contraseña cambiada; inicia sesión de nuevo.' })
-  changePassword(@CurrentUserContext() current: AuthenticatedRequestContext, @Body() dto: ChangePasswordDto) {
-    return this.auth.changePassword(current.userId, dto.currentPassword, dto.newPassword);
+  @ApiOperation({
+    summary: 'Cambia la contraseña y revoca todas las sesiones.',
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'Contraseña cambiada; inicia sesión de nuevo.',
+  })
+  changePassword(
+    @CurrentUserContext() current: AuthenticatedRequestContext,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.auth.changePassword(
+      current.userId,
+      dto.currentPassword,
+      dto.newPassword,
+    );
   }
 }

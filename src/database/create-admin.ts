@@ -1,16 +1,18 @@
 import 'dotenv/config';
+import 'reflect-metadata';
 import { stdin, stdout } from 'node:process';
 import { createInterface } from 'node:readline/promises';
-import 'reflect-metadata';
+import { DataSource } from 'typeorm';
 import {
   hashPassword,
   normalizeEmail,
   normalizePhone,
 } from '../auth/password.util.js';
-import dataSource from './data-source.js';
-import { AuditRepository } from './repositories/audit.repository.js';
-import { BootstrapRepository } from './repositories/bootstrap.repository.js';
-const bootstrap = new BootstrapRepository();
+import { AuditService } from '../common/audit/audit.service.js';
+import { BootstrapService } from '../users/bootstrap.service.js';
+import { createCommandContext } from './command-context.js';
+
+let context: import('@nestjs/common').INestApplicationContext | undefined;
 
 async function hidden(prompt: string): Promise<string> {
   if (!stdin.isTTY || typeof stdin.setRawMode !== 'function')
@@ -40,6 +42,7 @@ async function hidden(prompt: string): Promise<string> {
 }
 
 const rl = createInterface({ input: stdin, output: stdout });
+
 try {
   if (!stdin.isTTY)
     throw new Error('Ejecuta admin:create desde una terminal interactiva.');
@@ -71,7 +74,10 @@ try {
     throw new Error('La contraseña no cumple los requisitos.');
   }
   const passwordHash = await hashPassword(password);
-  await dataSource.initialize();
+  context = await createCommandContext('admin');
+  const dataSource = context.get(DataSource);
+  const bootstrap = context.get(BootstrapService);
+  const audit = context.get(AuditService);
   await dataSource.transaction(async (manager) => {
     await bootstrap.lockAdministratorCreation(manager);
     const admins = await bootstrap.countAdministrators(manager);
@@ -94,7 +100,7 @@ try {
     );
 
     await bootstrap.insertProfile(manager, id, name, phone);
-    await new AuditRepository().append(
+    await audit.append(
       manager,
       {},
       'usuario',
@@ -116,5 +122,5 @@ try {
   process.exitCode = 1;
 } finally {
   rl.close();
-  if (dataSource.isInitialized) await dataSource.destroy();
+  await context?.close();
 }

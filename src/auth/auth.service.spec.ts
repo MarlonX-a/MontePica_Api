@@ -1,15 +1,16 @@
 import { UnauthorizedException } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
-import type { JwtService } from '@nestjs/jwt';
-import type { DataSource } from 'typeorm';
+import { type JwtService } from '@nestjs/jwt';
+import { type DataSource } from 'typeorm';
+import { IdentityService } from '../common/identity/identity.service.js';
+import { PermissionLookupService } from '../common/identity/permission-lookup.service.js';
 import { AuthService } from './auth.service.js';
 import { verifyPassword } from './password.util.js';
-import type { IdentityRepository } from './repositories/identity.repository.js';
-import type { PermissionsRepository } from './repositories/permissions.repository.js';
+
 vi.mock('./password.util.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./password.util.js')>()),
   verifyPassword: vi.fn(),
 }));
+
 describe('AuthService login', () => {
   const manager = {},
     identities = {
@@ -25,11 +26,12 @@ describe('AuthService login', () => {
     work(manager),
   );
   const service = new AuthService(
+    {} as never,
     { transaction } as unknown as DataSource,
     jwt as unknown as JwtService,
-    {} as ConfigService,
-    identities as unknown as IdentityRepository,
-    permissions as unknown as PermissionsRepository,
+    identities as unknown as IdentityService,
+    permissions as unknown as PermissionLookupService,
+    { append: vi.fn() } as never,
   );
   beforeEach(() => {
     vi.resetAllMocks();

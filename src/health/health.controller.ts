@@ -18,12 +18,17 @@ export class HealthController {
 
   @Get('ready')
   @ApiOperation({ summary: 'Comprueba que la API puede usar PostgreSQL' })
-  @ApiResponse({ status: 200, description: 'La API y PostgreSQL están disponibles.' })
+  @ApiResponse({
+    status: 200,
+    description: 'La API y PostgreSQL están disponibles.',
+  })
   @ApiResponse({ status: 503, description: 'PostgreSQL no está disponible.' })
   async getReadiness() {
     const ready = await this.healthService.isDatabaseReady();
     if (!ready) {
-      throw new ServiceUnavailableException('La base de datos no está disponible.');
+      throw new ServiceUnavailableException(
+        'La base de datos no está disponible.',
+      );
     }
     return { status: 'ok', database: 'up' };
   }

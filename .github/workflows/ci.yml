@@ -33,20 +33,8 @@ jobs:
       - name: Validar lint
         run: npm run lint
 
-      - name: Login y autenticación
-        run: npm run test -- src/auth/auth.service.spec.ts
-
-      - name: Permisos y autorización
-        run: npm run test -- src/auth/permissions.guard.spec.ts
-
-      - name: Administración de usuarios, roles y permisos
-        run: npm run test -- src/admin/admin.service.spec.ts
-
-      - name: Catálogo público
-        run: npm run test -- src/catalog/catalog.service.spec.ts
-
-      - name: Configuración y variables de entorno
-        run: npm run test -- src/config/environment.validation.spec.ts
+      - name: Pruebas unitarias y límites de arquitectura
+        run: npm test
 
       - name: API E2E - salud, contratos de autenticación y rutas administrativas
         run: npm run test:e2e

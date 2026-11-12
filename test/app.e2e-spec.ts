@@ -1,23 +1,24 @@
 import { INestApplication } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
 import { Test } from '@nestjs/testing';
-import { DataSource } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { type Server } from 'node:http';
 import request from 'supertest';
-import { App } from 'supertest/types';
+import { DataSource } from 'typeorm';
 import { configureApp } from '../src/app.setup.js';
+import { AuthService } from '../src/auth/auth.service.js';
+import { UserSession } from '../src/auth/entities/user-session.entity.js';
 import { Category } from '../src/catalog/entities/category.entity.js';
 import { Product } from '../src/catalog/entities/product.entity.js';
-import { Client } from '../src/auth/entities/client.entity.js';
-import { Profile } from '../src/auth/entities/profile.entity.js';
-import { Role } from '../src/auth/entities/role.entity.js';
-import { User } from '../src/auth/entities/user.entity.js';
-import { UserSession } from '../src/auth/entities/user-session.entity.js';
-import { DeliveryExpiryService } from '../src/tables/delivery-expiry.service.js';
-import { AuthService } from '../src/auth/auth.service.js';
+import { Client } from '../src/common/identity/entities/client.entity.js';
+import { DeliveryExpiryService } from '../src/delivery/delivery-expiry.service.js';
+import { Role } from '../src/roles/entities/role.entity.js';
+import { Profile } from '../src/users/entities/profile.entity.js';
+import { User } from '../src/users/entities/user.entity.js';
 
 describe('API foundation (e2e)', () => {
-  let app: INestApplication<App>;
+  let app: INestApplication<Server>;
   const query = vi.fn();
   const categoryRepository = { find: vi.fn() };
   const productQueryBuilder = {
@@ -84,7 +85,13 @@ describe('API foundation (e2e)', () => {
       .overrideProvider(DeliveryExpiryService)
       .useValue({})
       .overrideProvider(DataSource)
-      .useValue({ query, manager: {} })
+      .useValue({
+        query,
+        manager: {},
+        entityMetadatas: [],
+        options: { type: 'postgres' },
+        getRepository: () => ({ manager: {} }),
+      })
       .overrideProvider(getRepositoryToken(Category))
       .useValue(categoryRepository)
       .overrideProvider(getRepositoryToken(Product))
@@ -141,6 +148,11 @@ describe('API foundation (e2e)', () => {
     const response = await request(app.getHttpServer())
       .get('/docs-json')
       .expect(200);
+    const baseline = JSON.parse(
+      readFileSync('test/fixtures/openapi-v1.json', 'utf8'),
+    );
+    expect(response.body.paths).toEqual(baseline.paths);
+    expect(response.body.components.schemas).toEqual(baseline.schemas);
     expect(response.body.paths).toHaveProperty('/api/v1/health');
     expect(response.body.paths).toHaveProperty('/api/v1/health/ready');
     expect(response.body.paths).toHaveProperty('/api/v1/categories');

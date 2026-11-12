@@ -24,33 +24,50 @@ describe('validateEnvironment', () => {
       CORS_ORIGINS: ['http://localhost:8081'],
       JWT_ACCESS_SECRET: required.JWT_ACCESS_SECRET,
       TRANSFER_PAYMENTS_ENABLED: false,
-      S3_REGION: '', S3_BUCKET: '', S3_ACCESS_KEY_ID: '', S3_SECRET_ACCESS_KEY: '',
-      S3_ENDPOINT: '', S3_PREFIX: 'montepica/receipts/', S3_FORCE_PATH_STYLE: false,
+      S3_REGION: '',
+      S3_BUCKET: '',
+      S3_ACCESS_KEY_ID: '',
+      S3_SECRET_ACCESS_KEY: '',
+      S3_ENDPOINT: '',
+      S3_PREFIX: 'montepica/receipts/',
+      S3_FORCE_PATH_STYLE: false,
     });
   });
 
   it('requires S3 credentials when transfers are enabled', () => {
-    expect(() => validateEnvironment({ ...required, TRANSFER_PAYMENTS_ENABLED: 'true' })).toThrow('S3_REGION');
-    expect(() => validateEnvironment({ ...required, S3_PREFIX: '../unsafe/' })).toThrow('S3_PREFIX');
+    expect(() =>
+      validateEnvironment({ ...required, TRANSFER_PAYMENTS_ENABLED: 'true' }),
+    ).toThrow('S3_REGION');
+    expect(() =>
+      validateEnvironment({ ...required, S3_PREFIX: '../unsafe/' }),
+    ).toThrow('S3_PREFIX');
   });
 
   it('rejects missing credentials and invalid ports', () => {
     expect(() => validateEnvironment({})).toThrow('DB_USERNAME');
-    expect(() => validateEnvironment({ ...required, PORT: '70000' })).toThrow('PORT');
+    expect(() => validateEnvironment({ ...required, PORT: '70000' })).toThrow(
+      'PORT',
+    );
     expect(() =>
-      validateEnvironment({ ...required, DB_PASSWORD: 'cambia_esta_clave_local' }),
+      validateEnvironment({
+        ...required,
+        DB_PASSWORD: 'cambia_esta_clave_local',
+      }),
     ).toThrow('Reemplaza DB_PASSWORD');
   });
 
   it('rejects CORS entries that are not bare HTTP origins', () => {
     expect(() =>
-      validateEnvironment({ ...required, CORS_ORIGINS: 'http://localhost:8081/app' }),
+      validateEnvironment({
+        ...required,
+        CORS_ORIGINS: 'http://localhost:8081/app',
+      }),
     ).toThrow('sin ruta');
   });
 
   it('requires a sufficiently long access-token secret for the application', () => {
-    expect(() => validateEnvironment({ ...required, JWT_ACCESS_SECRET: 'short' })).toThrow(
-      'JWT_ACCESS_SECRET debe tener al menos 32 bytes',
-    );
+    expect(() =>
+      validateEnvironment({ ...required, JWT_ACCESS_SECRET: 'short' }),
+    ).toThrow('JWT_ACCESS_SECRET debe tener al menos 32 bytes');
   });
 });

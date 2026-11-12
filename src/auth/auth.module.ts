@@ -2,20 +2,20 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Client } from './entities/client.entity.js';
-import { Profile } from './entities/profile.entity.js';
-import { Role } from './entities/role.entity.js';
-import { User } from './entities/user.entity.js';
-import { UserSession } from './entities/user-session.entity.js';
+import { AuditModule } from '../common/audit/audit.module.js';
+import { IdentityModule } from '../common/identity/identity.module.js';
+import { User } from '../users/entities/user.entity.js';
+import { AccessIdentityService } from './access-identity.service.js';
+import { AuthAccessGuard } from './auth-access.guard.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
-import { AuthAccessGuard } from './auth-access.guard.js';
 import { PermissionsGuard } from './permissions.guard.js';
-import { AccessIdentityService } from './access-identity.service.js';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Client, Profile, Role, User, UserSession]),
+    IdentityModule,
+    AuditModule,
+    TypeOrmModule.forFeature([User]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -31,16 +31,17 @@ import { AccessIdentityService } from './access-identity.service.js';
   ],
   controllers: [AuthController],
   providers: [
-    AuthService,
-    AuthAccessGuard,
-    PermissionsGuard,
     AccessIdentityService,
+    AuthAccessGuard,
+    AuthService,
+    PermissionsGuard,
   ],
   exports: [
+    AccessIdentityService,
     AuthAccessGuard,
+    AuthService,
     PermissionsGuard,
     JwtModule,
-    AccessIdentityService,
   ],
 })
 export class AuthModule {}

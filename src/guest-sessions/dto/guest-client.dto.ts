@@ -1,0 +1,10 @@
+import { ApiProperty } from '@nestjs/swagger';
+
+export class GuestClientDto {
+  @ApiProperty({ format: 'uuid' })
+  id: string;
+  @ApiProperty()
+  name: string;
+  @ApiProperty({ nullable: true, type: String })
+  phone: string | null;
+}

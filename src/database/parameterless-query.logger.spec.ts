@@ -3,7 +3,9 @@ import { ParameterlessQueryLogger } from './parameterless-query.logger.js';
 it('omits sensitive query parameters and database error details from all query logs', () => {
   class RecordingLogger extends ParameterlessQueryLogger {
     entries: unknown[] = [];
-    protected override writeLog(_level: unknown, messages: unknown): void { this.entries.push(messages); }
+    protected override writeLog(_level: unknown, messages: unknown): void {
+      this.entries.push(messages);
+    }
   }
   const logger = new RecordingLogger(true);
   const secret = 'guest_sensitive_parameter';

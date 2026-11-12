@@ -4,27 +4,28 @@ import {
   InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'node:crypto';
-import { DataSource, QueryFailedError } from 'typeorm';
-import { AuditRepository } from '../database/repositories/audit.repository.js';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { AuditService } from '../common/audit/audit.service.js';
+import { Client } from '../common/identity/entities/client.entity.js';
+import { IdentityService } from '../common/identity/identity.service.js';
+import { PermissionLookupService } from '../common/identity/permission-lookup.service.js';
+import { Profile } from '../users/entities/profile.entity.js';
+import { User } from '../users/entities/user.entity.js';
 import { AuthUserResponse } from './auth.types.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
-import { Client } from './entities/client.entity.js';
-import { Profile } from './entities/profile.entity.js';
-import { User } from './entities/user.entity.js';
 import {
   hashPassword,
   normalizeEmail,
   normalizePhone,
   verifyPassword,
 } from './password.util.js';
-import { IdentityRepository } from './repositories/identity.repository.js';
-import { PermissionsRepository } from './repositories/permissions.repository.js';
 
 const ACCESS_TOKEN_SECONDS = 900;
+
 const REFRESH_SESSION_MILLISECONDS = 30 * 24 * 60 * 60 * 1000;
 
 function hashRefreshToken(token: string): string {
@@ -34,12 +35,12 @@ function hashRefreshToken(token: string): string {
 @Injectable()
 export class AuthService {
   constructor(
+    @InjectRepository(User) private readonly records: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
-    private readonly config: ConfigService,
-    private readonly identities: IdentityRepository = new IdentityRepository(),
-    private readonly permissions: PermissionsRepository = new PermissionsRepository(),
-    private readonly audit: AuditRepository = new AuditRepository(),
+    private readonly identities: IdentityService,
+    private readonly permissions: PermissionLookupService,
+    private readonly audit: AuditService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -135,7 +136,7 @@ export class AuthService {
   async refresh(refreshToken: string) {
     const oldHash = hashRefreshToken(refreshToken);
     const hint = await this.identities.findSessionByRefreshHash(
-      this.dataSource.manager,
+      this.records.manager,
       oldHash,
     );
     if (!hint)
@@ -180,23 +181,23 @@ export class AuthService {
 
   async getMe(userId: string): Promise<AuthUserResponse> {
     const user = await this.identities.findActiveUserWithRole(
-      this.dataSource.manager,
+      this.records.manager,
       userId,
     );
     if (!user) throw new UnauthorizedException('Sesión no válida.');
     const profile = await this.identities.findProfile(
-      this.dataSource.manager,
+      this.records.manager,
       userId,
     );
     const client = await this.identities.findClient(
-      this.dataSource.manager,
+      this.records.manager,
       userId,
     );
     return this.toUserResponse(
       user,
       profile,
       client,
-      await this.listPermissionCodes(this.dataSource.manager, user.role.id),
+      await this.listPermissionCodes(this.records.manager, user.role.id),
     );
   }
 

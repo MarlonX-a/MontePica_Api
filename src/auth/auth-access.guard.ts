@@ -5,9 +5,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import type { Request } from 'express';
-import { AuthenticatedRequestContext } from './auth.types.js';
+import { type Request } from 'express';
 import { AccessIdentityService } from './access-identity.service.js';
+import { AuthenticatedRequestContext } from './auth.types.js';
 
 type AuthenticatedRequest = Request & {
   authContext?: AuthenticatedRequestContext;

@@ -1,25 +1,25 @@
-import { ConfigService } from '@nestjs/config';
 import 'dotenv/config';
 import { DataSource } from 'typeorm';
+import { ReceiptReconciliationService } from '../common/storage/receipt-reconciliation.service.js';
+import { ReceiptStorageService } from '../common/storage/receipt-storage.service.js';
 import { validateEnvironment } from '../config/environment.validation.js';
-import { ReceiptStorageService } from '../tables/receipt-storage.service.js';
-import { ReceiptReferenceRepository } from '../tables/repositories/receipt-reference.repository.js';
-import { createDatabaseOptions } from './database.options.js';
+import { createCommandContext } from './command-context.js';
 
 async function main() {
   const env = validateEnvironment(process.env);
   if (!env.TRANSFER_PAYMENTS_ENABLED)
     throw new Error('Las transferencias deben estar habilitadas.');
-  const storage = new ReceiptStorageService(new ConfigService(env));
-  const db = new DataSource(createDatabaseOptions(process.env));
-  await db.initialize();
+  const context = await createCommandContext('receipts');
+  const storage = context.get(ReceiptStorageService);
+  const db = context.get(DataSource);
+  const reconciliation = context.get(ReceiptReconciliationService);
   try {
     const candidates = await storage.listOld(
       new Date(Date.now() - 24 * 60 * 60 * 1000),
     );
     let removed = 0;
     for (const candidate of candidates) {
-      const referenced = await new ReceiptReferenceRepository().isReferenced(
+      const referenced = await reconciliation.isReferenced(
         db.manager,
         candidate.key,
       );
@@ -32,7 +32,7 @@ async function main() {
       `Objetos revisados: ${candidates.length}; huérfanos eliminados: ${removed}.\n`,
     );
   } finally {
-    await db.destroy();
+    await context.close();
   }
 }
 

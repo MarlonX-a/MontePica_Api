@@ -1,38 +1,43 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import type { AuthenticatedRequestContext } from './auth.types.js';
-import { IdentityRepository } from './repositories/identity.repository.js';
-import { PermissionsRepository } from './repositories/permissions.repository.js';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { IdentityService } from '../common/identity/identity.service.js';
+import { PermissionLookupService } from '../common/identity/permission-lookup.service.js';
+import { User } from '../users/entities/user.entity.js';
+import { type AuthenticatedRequestContext } from './auth.types.js';
 
 @Injectable()
 export class AccessIdentityService {
   constructor(
-    private readonly db: DataSource,
-    private readonly identities: IdentityRepository = new IdentityRepository(),
-    private readonly permissions: PermissionsRepository = new PermissionsRepository(),
+    @InjectRepository(User) private readonly records: Repository<User>,
+    private readonly identities: IdentityService,
+    private readonly permissions: PermissionLookupService,
   ) {}
+
   async authenticatedSession(payload: {
     sub: string;
     sid: string;
     av: number;
   }): Promise<AuthenticatedRequestContext | null> {
     const session = await this.identities.findSession(
-      this.db.manager,
+      this.records.manager,
       payload.sid,
       payload.sub,
     );
     if (!session) return null;
     const user = await this.identities.findActiveUser(
-      this.db.manager,
+      this.records.manager,
       payload.sub,
     );
     if (!user?.active || user.accessVersion !== payload.av) return null;
     return { userId: user.id, sessionId: session.id };
   }
+
   permissionCodes(userId: string): Promise<string[]> {
-    return this.permissions.forUser(this.db.manager, userId);
+    return this.permissions.forUser(this.records.manager, userId);
   }
+
   clientForUser(userId: string) {
-    return this.permissions.clientIdentity(this.db.manager, userId);
+    return this.permissions.clientIdentity(this.records.manager, userId);
   }
 }

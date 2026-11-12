@@ -1,6 +1,14 @@
-import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { Equals, IsBoolean, IsEmail, IsString, Length, MaxLength, Matches } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  Equals,
+  IsBoolean,
+  IsEmail,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class RegisterDto {
   @ApiProperty({ example: 'María Zambrano', maxLength: 160 })
@@ -24,12 +32,16 @@ export class RegisterDto {
   @ApiProperty({ minLength: 8, maxLength: 128, writeOnly: true })
   @IsString()
   @Length(8, 128)
-  @Matches(/[A-ZÁÉÍÓÚÑ]/, { message: 'La contraseña debe incluir una mayúscula.' })
+  @Matches(/[A-ZÁÉÍÓÚÑ]/, {
+    message: 'La contraseña debe incluir una mayúscula.',
+  })
   @Matches(/\d/, { message: 'La contraseña debe incluir un número.' })
   password: string;
 
   @ApiProperty({ enum: [true] })
   @IsBoolean()
-  @Equals(true, { message: 'Debes aceptar los términos y políticas de privacidad.' })
+  @Equals(true, {
+    message: 'Debes aceptar los términos y políticas de privacidad.',
+  })
   termsAccepted: true;
 }

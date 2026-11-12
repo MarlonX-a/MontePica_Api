@@ -1,20 +1,17 @@
 import 'reflect-metadata';
-import { readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { parse } from 'dotenv';
 import { INestApplication, ServiceUnavailableException } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { DataSource } from 'typeorm';
+import { Test } from '@nestjs/testing';
+import { parse } from 'dotenv';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import request from 'supertest';
-import { createDatabaseOptions } from '../src/database/database.options.js';
+import { DataSource } from 'typeorm';
 import { configureApp } from '../src/app.setup.js';
-import {
-  GuestSessionsService,
-  hashAccessSecret,
-} from '../src/tables/guest-sessions.service.js';
-import { TablesService } from '../src/tables/tables.service.js';
-import { TableAccessService } from '../src/tables/table-access.service.js';
+import { CatalogSeedService } from '../src/catalog/catalog-seed.service.js';
+import { ReceiptStorageService } from '../src/common/storage/receipt-storage.service.js';
+import { createCommandContext } from '../src/database/command-context.js';
+import { createDatabaseOptions } from '../src/database/database.options.js';
 import { CreateCatalogTables1792080000000 } from '../src/database/migrations/1792080000000-CreateCatalogTables.js';
 import { CreateIdentityTables1792340000000 } from '../src/database/migrations/1792340000000-CreateIdentityTables.js';
 import { CreatePermissionsAndAudit1792600000000 } from '../src/database/migrations/1792600000000-CreatePermissionsAndAudit.js';
@@ -30,18 +27,23 @@ import { CreateCashPayments1794000000000 } from '../src/database/migrations/1794
 import { CreateTransferReceipts1794100000000 } from '../src/database/migrations/1794100000000-CreateTransferReceipts.js';
 import { CreateDeliveryCoverage1794200000000 } from '../src/database/migrations/1794200000000-CreateDeliveryCoverage.js';
 import { DeliveryOrders1794300000000 } from '../src/database/migrations/1794300000000-DeliveryOrders.js';
+import { DeliveryFulfillment1794400000000 } from '../src/database/migrations/1794400000000-DeliveryFulfillment.js';
 import { CancellationRequests1794500000000 } from '../src/database/migrations/1794500000000-CancellationRequests.js';
 import { ExecuteRefunds1794600000000 } from '../src/database/migrations/1794600000000-ExecuteRefunds.js';
 import { PointsProgram1794700000000 } from '../src/database/migrations/1794700000000-PointsProgram.js';
 import { LocalRewards1794800000000 } from '../src/database/migrations/1794800000000-LocalRewards.js';
 import { CashRegisterClosures1794900000000 } from '../src/database/migrations/1794900000000-CashRegisterClosures.js';
 import { OperatingDayClosures1795000000000 } from '../src/database/migrations/1795000000000-OperatingDayClosures.js';
-import { DeliveryFulfillment1794400000000 } from '../src/database/migrations/1794400000000-DeliveryFulfillment.js';
-import { DeliveryExpiryService } from '../src/tables/delivery-expiry.service.js';
-import { RewardsService } from '../src/rewards/rewards.service.js';
-import { ReceiptStorageService } from '../src/tables/receipt-storage.service.js';
-import { CatalogSeedRepository } from '../src/catalog/repositories/catalog-seed.repository.js';
-import { BootstrapRepository } from '../src/database/repositories/bootstrap.repository.js';
+import { DeliveryExpiryService } from '../src/delivery/delivery-expiry.service.js';
+import {
+  GuestSessionsService,
+  hashAccessSecret,
+} from '../src/guest-sessions/guest-sessions.service.js';
+import { RedemptionExpiryService } from '../src/redemptions/redemption-expiry.service.js';
+import { TablesService } from '../src/tables/tables.service.js';
+import { BootstrapService } from '../src/users/bootstrap.service.js';
+import { TableAccessService } from '../src/visits/table-access.service.js';
+import { VisitsService } from '../src/visits/visits.service.js';
 
 // Opt-in only: credentials from .env are used against postgres to CREATE a fresh, disposable database.
 // Never connects to DB_NAME from .env. Requires CREATEDB; no migrations are applied to MontePica.
@@ -58,6 +60,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     let dayId: string;
     let guests: GuestSessionsService;
     let tables: TablesService;
+    let visits: VisitsService;
     let access: TableAccessService;
     let counter = 0;
     const receiptObjects = new Map<string, Buffer>();
@@ -118,6 +121,9 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       await db.undoLastMigration();
       await db.runMigrations();
       for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+      expect((await db.driver.createSchemaBuilder().log()).upQueries).toEqual(
+        [],
+      );
       const { AppModule } = await import('../src/app.module.js');
       const module = await Test.createTestingModule({ imports: [AppModule] })
         .overrideProvider(DataSource)
@@ -147,6 +153,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       await app.init();
       guests = app.get(GuestSessionsService);
       tables = app.get(TablesService);
+      visits = app.get(VisitsService);
       access = app.get(TableAccessService);
       for (const role of ['admin', 'worker', 'client']) {
         const [user] = await db.query(
@@ -202,8 +209,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
 
     async function fixture() {
       const table = await tables.createTable(`M${++counter}`, users.admin);
-      const visit = await tables.openVisit(table.id, users.admin);
-      const qr = await tables.issueQr(visit.id, users.admin);
+      const visit = await visits.openVisit(table.id, users.admin);
+      const qr = await visits.issueQr(visit.id, users.admin);
       return { table, visit, qr };
     }
 
@@ -309,44 +316,78 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       });
     });
 
-    it('runs command repositories without an HTTP server or overwriting catalog changes', async () => {
-      const catalog = new CatalogSeedRepository(),
-        bootstrap = new BootstrapRepository();
-      const category = {
-          normalizedName: 'refactor-command',
-          name: 'Comando',
-          sortOrder: 0,
-        },
-        product = {
-          category: category.normalizedName,
-          sku: 'refactor-command-product',
-          name: 'Producto',
-          description: 'Ejemplo',
-          priceCents: 100,
-          sortOrder: 0,
-        };
-      await db.transaction(async (manager) => {
-        await bootstrap.lockAdministratorCreation(manager);
-        expect(await bootstrap.countAdministrators(manager)).toBe(1);
-        expect(await bootstrap.emailExists(manager, 'admin@test.invalid')).toBe(
-          true,
+    it('starts command application contexts without HTTP or expiry tasks', async () => {
+      for (const kind of ['admin', 'seed', 'receipts'] as const) {
+        const context = await createCommandContext(kind);
+        try {
+          const connection = context.get(DataSource);
+          expect(connection).not.toBe(db);
+          const [current] = await connection.query(
+            'SELECT current_database() AS name',
+          );
+          expect(current.name).toBe(databaseName);
+          expect(() => context.get(DeliveryExpiryService)).toThrow();
+          expect(() => context.get(RedemptionExpiryService)).toThrow();
+          if (kind === 'admin') {
+            expect(
+              await context
+                .get(BootstrapService)
+                .countAdministrators(connection.manager),
+            ).toBe(1);
+          } else if (kind === 'seed') {
+            expect(context.get(CatalogSeedService)).toBeInstanceOf(
+              CatalogSeedService,
+            );
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    });
+
+    it('runs command services without overwriting catalog changes', async () => {
+      const catalog = new CatalogSeedService();
+      const context = await createCommandContext('admin');
+      const bootstrap = context.get(BootstrapService);
+      try {
+        const category = {
+            normalizedName: 'refactor-command',
+            name: 'Comando',
+            sortOrder: 0,
+          },
+          product = {
+            category: category.normalizedName,
+            sku: 'refactor-command-product',
+            name: 'Producto',
+            description: 'Ejemplo',
+            priceCents: 100,
+            sortOrder: 0,
+          };
+        await db.transaction(async (manager) => {
+          await bootstrap.lockAdministratorCreation(manager);
+          expect(await bootstrap.countAdministrators(manager)).toBe(1);
+          expect(
+            await bootstrap.emailExists(manager, 'admin@test.invalid'),
+          ).toBe(true);
+          expect(await bootstrap.findAdministratorRole(manager)).toBeTruthy();
+          await catalog.insertCategoryIfMissing(manager, category);
+          await catalog.insertProductIfMissing(manager, product);
+        });
+        await db.query('UPDATE producto SET precio_ctvs=250 WHERE sku=$1', [
+          product.sku,
+        ]);
+        await db.transaction(async (manager) => {
+          await catalog.insertCategoryIfMissing(manager, category);
+          await catalog.insertProductIfMissing(manager, product);
+        });
+        const rows = await db.query(
+          'SELECT precio_ctvs FROM producto WHERE sku=$1',
+          [product.sku],
         );
-        expect(await bootstrap.findAdministratorRole(manager)).toBeTruthy();
-        await catalog.insertCategoryIfMissing(manager, category);
-        await catalog.insertProductIfMissing(manager, product);
-      });
-      await db.query('UPDATE producto SET precio_ctvs=250 WHERE sku=$1', [
-        product.sku,
-      ]);
-      await db.transaction(async (manager) => {
-        await catalog.insertCategoryIfMissing(manager, category);
-        await catalog.insertProductIfMissing(manager, product);
-      });
-      const rows = await db.query(
-        'SELECT precio_ctvs FROM producto WHERE sku=$1',
-        [product.sku],
-      );
-      expect(rows).toEqual([{ precio_ctvs: 250 }]);
+        expect(rows).toEqual([{ precio_ctvs: 250 }]);
+      } finally {
+        await context.close();
+      }
     });
 
     it('configures points with authorization, validation, idempotency and audited rollback', async () => {
@@ -861,7 +902,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       expect(settings.body.version).toBe(2);
       expect(settings.body.shippingFeeCents).toBe(0);
       expect((await configure().expect(200)).body).toEqual(settings.body);
-      const submit = (payload: unknown, key: string) =>
+      const submit = (payload: object, key: string) =>
         request(http())
           .post('/api/v1/me/delivery-requests')
           .set('Authorization', auth(tokens.client))
@@ -1220,8 +1261,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         [visit.id, a.client.id, qr.qrVersion, b.client.id],
       );
       const renewals = await Promise.all([
-        tables.issueQr(visit.id, users.worker),
-        tables.issueQr(visit.id, users.admin),
+        visits.issueQr(visit.id, users.worker),
+        visits.issueQr(visit.id, users.admin),
       ]);
       expect(renewals.map((r) => r.qrVersion).sort()).toEqual([
         qr.qrVersion + 1,
@@ -1237,7 +1278,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         access.resolveQr(renewals.find((r) => r !== latest)!.qrToken),
       ).rejects.toMatchObject({ status: 404 });
       expect((await access.resolveQr(latest.qrToken)).visitId).toBe(visit.id);
-      const states = await db.query(
+      const states = await db.query<Array<{ estado: string }>>(
         'SELECT estado FROM participante WHERE id_visita=$1 ORDER BY estado',
         [visit.id],
       );
@@ -1284,7 +1325,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       await expect(access.resolveQr(qr.qrToken)).rejects.toMatchObject({
         status: 404,
       });
-      await tables.openVisit(table.id, users.admin);
+      await visits.openVisit(table.id, users.admin);
       const [m] = await db.query('SELECT qr_hash FROM mesa WHERE id_mesa=$1', [
         table.id,
       ]);
@@ -1303,7 +1344,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       );
       await failAudit('visit.qr_issued');
       try {
-        await expect(tables.issueQr(visit.id, users.admin)).rejects.toThrow(
+        await expect(visits.issueQr(visit.id, users.admin)).rejects.toThrow(
           'test audit failure',
         );
       } finally {
@@ -1331,7 +1372,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           status: 409,
         });
         await expect(
-          tables.issueQr(visit.id, users.admin),
+          visits.issueQr(visit.id, users.admin),
         ).rejects.toMatchObject({ status: 409 });
       } finally {
         await db.query(
@@ -1353,7 +1394,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       ]);
       await failAudit('visit.opened');
       try {
-        await expect(tables.openVisit(table.id, users.admin)).rejects.toThrow(
+        await expect(visits.openVisit(table.id, users.admin)).rejects.toThrow(
           'test audit failure',
         );
       } finally {
@@ -1369,8 +1410,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       );
       expect(total).toBe(0);
       const opened = await Promise.allSettled([
-        tables.openVisit(table.id, users.admin),
-        tables.openVisit(table.id, users.worker),
+        visits.openVisit(table.id, users.admin),
+        visits.openVisit(table.id, users.worker),
       ]);
       expect(opened.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
       expect(opened.find((r) => r.status === 'rejected')).toMatchObject({
@@ -1665,7 +1706,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'rotate-ask')
         .send({ qrToken: f.qr.qrToken, alias: 'Guest' })
         .expect(201);
-      await tables.issueQr(f.visit.id, users.admin);
+      await visits.issueQr(f.visit.id, users.admin);
       await request(http())
         .post(`/api/v1/admin/participants/${pending.body.id}/approve`)
         .set('Authorization', auth(tokens.worker))
@@ -2673,7 +2714,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .expect(409);
       const shortageId = await makeRequest('8b-shortage');
       const shortageUrl = `/api/v1/me/delivery-requests/${shortageId}/orders`;
-      const send = (payload: unknown, key: string) =>
+      const send = (payload: object, key: string) =>
         request(http())
           .post(shortageUrl)
           .set('Authorization', auth(tokens.client))
@@ -3724,7 +3765,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         `UPDATE solicitud_canje SET expira_en=clock_timestamp()-interval '1 second' WHERE id_canje=$1`,
         [expiring.id],
       );
-      await app.get(RewardsService).expirePending();
+      await app.get(RedemptionExpiryService).expirePending();
       expect(
         (
           await request(http())

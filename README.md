@@ -1,6 +1,6 @@
 # MontePica Backend
 
-API REST construida con NestJS, PostgreSQL y TypeORM. El backend se desarrolla por módulos; por ahora incluye configuración, conexión a PostgreSQL local, migraciones, documentación OpenAPI y comprobaciones de estado.
+API REST construida con NestJS, PostgreSQL y TypeORM. Incluye autenticación, catálogo, operación diaria, inventario, mesas, pedidos locales y a domicilio, pagos, devoluciones, puntos, canjes y cierres de caja y jornada hasta la etapa 11B. Swagger está disponible en `/docs`.
 
 ## Requisitos
 
@@ -507,16 +507,43 @@ Solo el administrador puede cerrar con `POST /api/v1/admin/operations/days/{id}/
 
 La apertura normal (`POST /api/v1/admin/operations/days/open`) queda bloqueada si hay jornadas anteriores abiertas. Si deben cobrarse cuentas antiguas, un administrador con `operations.openWithPendingDays` puede abrir la fecha actual con `POST /api/v1/admin/operations/days/open-with-pending-days`, `Idempotency-Key` y `{ "reason": "Recuperación de cuentas pendientes" }`. La excepción guarda el motivo y los identificadores de jornadas pendientes, sin cerrarlas ni modificarlas. Abre luego la caja actual y resuelve las cuentas antiguas con los flujos existentes. Los cierres no se pueden modificar ni reabrir. La migración `OperatingDayClosures1795000000000` es reversible únicamente antes de guardar cierres o aperturas excepcionales.
 
-## Arquitectura: servicios y repositorios
+## Arquitectura por áreas con TypeORM
 
-Los controladores validan contratos HTTP y llaman a servicios. Los servicios aplican reglas del negocio y coordinan transacciones; las consultas, filtros SQL y operaciones del ORM pertenecen a las carpetas `repositories` de cada módulo. El catálogo y la identidad usan entidades existentes de TypeORM; los repositorios de operaciones complejas conservan SQL parametrizado y proyecciones tipadas. No se añaden entidades ni cambios de esquema para esta separación.
+Cada área tiene un módulo propietario, controladores separados por acceso, servicios, `dto`, `entities` y tipos de persistencia. Cada controlador y cada DTO tienen su propio archivo. Los controladores y guards delegan en servicios, sin consultar la base directamente.
 
-`PersistenceModule` registra y comparte los repositorios sin estado. El catálogo registra su repositorio junto a `TypeOrmModule.forFeature`. `AccessIdentityService` permite a los guards resolver identidad y permisos sin acceder directamente a PostgreSQL. `OrdersQueryService` separa las consultas de pedidos de sus escrituras; `RefundsService` atiende las consultas y ejecuciones de devoluciones, con su propio repositorio.
+| Área                                               | Servicios y responsabilidades                                                                   |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `auth`, `users`, `roles`, `guest-sessions`         | Autenticación, administración de usuarios, permisos e invitados.                                |
+| `catalog`                                          | Consulta pública y administración de categorías y productos.                                    |
+| `operations`, `cash`, `inventory`                  | Configuración, apertura y cierre de jornadas, caja y existencias.                               |
+| `tables`, `visits`, `participants`                 | Mesas, QR, visitas y cuentas individuales.                                                      |
+| `orders`, `delivery`                               | Creación, consultas, edición y transiciones de pedidos; cobertura y vencimientos de domicilios. |
+| `accounts`, `settlements`, `payments`, `transfers` | Consumo, liquidaciones, cobros y comprobantes privados.                                         |
+| `cancellations`, `refunds`                         | Solicitudes y decisiones de cancelación; ejecución de devoluciones.                             |
+| `points`, `rewards`, `redemptions`                 | Acumulaciones, catálogo de recompensas, reservas, decisiones y vencimiento de canjes.           |
 
-La transacción se abre en el servicio que coordina el caso de uso o en el coordinador idempotente. Cada escritura, consulta con bloqueo y operación de auditoría recibe el mismo `EntityManager`: los repositorios no abren, confirman ni revierten transacciones. Las lecturas independientes reciben el administrador habitual de la conexión. Los repositorios tienen métodos específicos e inputs nombrados; no ofrecen una entrada pública para ejecutar SQL arbitrario. Los filtros y fragmentos dinámicos permanecen privados dentro de la capa de datos.
+Los servicios usan `@InjectRepository`, `Repository<Entity>` y QueryBuilder. Las lecturas independientes utilizan los repositorios inyectados. Dentro de una transacción, las consultas y escrituras utilizan `manager.getRepository(Entity)` y los QueryBuilder del mismo `EntityManager`. Las expresiones de filtros, agregaciones y subconsultas permanecen parametrizadas. No existen repositorios propios ni un registro global `PersistenceModule`.
 
-Auditoría, idempotencia, autorización transaccional y bloqueos operativos tienen repositorios compartidos. Se conservan las claves y el orden de bloqueos, los hashes y respuestas idempotentes existentes, el almacenamiento privado y su compensación y las transacciones individuales de las tareas de vencimiento. Los comandos `admin:create`, `seed:catalog` y `receipts:reconcile` utilizan repositorios sin iniciar un servidor HTTP. Las migraciones y el `SELECT 1` técnico del servicio de salud permanecen en infraestructura.
+`src/database/entities.ts` contiene el registro explícito de las 51 entidades que comparten API, migraciones y comandos. Los mapeos conservan nombres físicos, relaciones, restricciones e índices del esquema migrado. Los valores `bigint` se mantienen como cadenas o enteros grandes hasta validar su rango; las respuestas usan proyecciones explícitas, sin exponer entidades completas ni secretos. La reorganización no requiere migraciones y mantiene `synchronize: false`.
 
-Durante la extracción se corrigieron dos defectos previos del manejo de `UPDATE ... RETURNING`: la actualización de configuración devuelve el objeto de configuración en lugar de la tupla del controlador PostgreSQL, y la ejecución de devolución guarda su UUID correcto como recurso idempotente. Ambas correcciones tienen pruebas de regresión. Los endpoints y sus contratos documentados se conservan.
+`OrdersService`, `OrdersEditingService`, `OrdersLifecycleService` y `OrdersQueryService` separan creación, edición, transiciones y consultas. `OperationsSettingsService`, `OperatingDaysService` y `OperatingDayClosureService` separan configuración, apertura y cierre. Las consultas de cuentas, las liquidaciones y las devoluciones tienen sus propios servicios y módulos. Recompensas y canjes también están separados.
 
-Para verificar la arquitectura y las reglas, ejecutar `npm test`; para tipos, `npx tsc -p tsconfig.build.json --noEmit --incremental false`; para lint, `npm run lint`. La suite E2E se ejecuta con `$env:RUN_POSTGRES_E2E='1'; npm run test:e2e` en PowerShell: crea y elimina una base temporal, conserva las migraciones y simula S3. No usa la base `MontePica` como destino. No ejecutar un build que borre `dist` mientras esté activo el servidor en vigilancia.
+Las operaciones compartidas que deben confirmarse juntas reciben el administrador de su llamador: `OrderInventoryService`, `AccountLifecycleService`, `PointsLedgerService` y `RedemptionReservationsService`. No abren transacciones internas. Cada servicio tiene un único módulo propietario, que lo exporta cuando otra área lo necesita; los módulos no forman ciclos.
+
+En `common` están los módulos de auditoría, identidad, idempotencia, almacenamiento privado y bloqueos. El caso de uso o coordinador idempotente abre la transacción. Auditoría, cambios de estado y respuesta idempotente usan el mismo administrador; la autorización se revalida antes de devolver una respuesta guardada. Se conservan claves, hashes, orden de bloqueos y compensación de archivos privados. La ejecución nativa de SQL se limita a bloqueos consultivos PostgreSQL, migraciones y la comprobación técnica de salud; las consultas de negocio utilizan TypeORM.
+
+`DeliveryExpiryService` y `RedemptionExpiryService` se registran una sola vez y procesan cada vencimiento en su propia transacción. Los comandos `admin:create`, `seed:catalog` y `receipts:reconcile` crean un contexto de aplicación con los servicios necesarios, sin abrir HTTP ni iniciar tareas de vencimiento, y cierran su conexión al terminar.
+
+Para añadir funcionalidades, crea o amplía el módulo del área, registra sus entidades en `TypeOrmModule.forFeature` y en el registro explícito, valida entradas mediante DTO y devuelve proyecciones de respuesta. Las operaciones internas compartidas deben recibir el `EntityManager`; evita transacciones anidadas, acceso a persistencia desde controladores o guards y registros duplicados de proveedores.
+
+Verificación:
+
+```powershell
+npx tsc -p tsconfig.json --noEmit --incremental false
+npm run lint
+npm test
+$env:RUN_POSTGRES_E2E='1'
+npm run test:e2e
+```
+
+La suite unitaria verifica reglas y límites de arquitectura: ausencia de repositorios propios, persistencia fuera de controladores y guards, proveedores con un único propietario y módulos sin ciclos. La suite E2E crea y elimina una base PostgreSQL temporal, simula S3, verifica migraciones y compara los mapeos TypeORM con el esquema migrado sin diferencias. Las credenciales deben permitir crear esa base temporal; `MontePica` no es el destino de las migraciones ni de los datos de prueba. No ejecutes un build que borre `dist` mientras esté activo el servidor en vigilancia.

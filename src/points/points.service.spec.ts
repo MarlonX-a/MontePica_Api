@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { calculateEarnedPoints } from './points.service.js';
+import { describe, expect, it } from 'vitest';
+import { calculateEarnedPoints } from './points-arithmetic.js';
 
 describe('Accrual arithmetic', () => {
   it.each([

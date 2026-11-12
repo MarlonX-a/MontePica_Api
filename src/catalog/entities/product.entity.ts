@@ -1,16 +1,23 @@
-import { Category } from './category.entity.js';
 import {
   Check,
   Column,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { Category } from './category.entity.js';
 
 @Entity({ name: 'producto' })
 @Check('ck_producto_precio_ctvs_no_negativo', 'precio_ctvs >= 0')
 @Check('ck_producto_orden_no_negativo', 'orden >= 0')
+@Index('ix_producto_menu_activo', ['active', 'visibleInMenu'], {
+  unique: false,
+})
+@Index('ix_producto_categoria_orden', ['category', 'name', 'sortOrder'], {
+  unique: false,
+})
 export class Product {
   @PrimaryGeneratedColumn('uuid', { name: 'id_producto' })
   id: string;
@@ -46,6 +53,10 @@ export class Product {
     nullable: false,
     onDelete: 'RESTRICT',
   })
-  @JoinColumn({ name: 'id_categoria', referencedColumnName: 'id' })
+  @JoinColumn({
+    name: 'id_categoria',
+    referencedColumnName: 'id',
+    foreignKeyConstraintName: 'fk_producto_categoria',
+  })
   category: Category;
 }

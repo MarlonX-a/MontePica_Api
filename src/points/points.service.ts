@@ -6,40 +6,47 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { DataSource, EntityManager } from 'typeorm';
-import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
-import { ParticipationIdempotencyService } from '../tables/participation-idempotency.service.js';
-import { auditTableOperation } from '../tables/table-audit.js';
-import { lockTableOperations } from '../tables/table-operations.js';
-import { PointsRepository } from './repositories/points.repository.js';
-
-export function calculateEarnedPoints(
-  productsCents: bigint,
-  rate: number,
-): bigint {
-  if (productsCents < 0n || !Number.isInteger(rate) || rate < 1 || rate > 1000)
-    throw new ConflictException('Base o tasa inválida.');
-  const points = (productsCents / 100n) * BigInt(rate);
-  if (points > BigInt(Number.MAX_SAFE_INTEGER))
-    throw new ConflictException('Puntos exceden el rango permitido.');
-  return points;
-}
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, Repository } from 'typeorm';
+import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
+import { AuditService } from '../common/audit/audit.service.js';
+import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
+import { AuthorizationService } from '../common/identity/authorization.service.js';
+import { Client } from '../common/identity/entities/client.entity.js';
+import { OperationalContextService } from '../common/transactions/operational-context.service.js';
+import { RedemptionRequest } from '../redemptions/entities/redemption-request.entity.js';
+import { PointsAccrual } from './entities/points-accrual.entity.js';
+import { PointsMovement } from './entities/points-movement.entity.js';
+import { PointsSettings } from './entities/points-settings.entity.js';
+import {
+  BalanceFindMovimientoPuntosRow,
+  ConfigureFindRolPermisoRow,
+  ConfigureInsertConfiguracionPuntosRow,
+  CurrentFindConfiguracionPuntosRow,
+  RequireClientFindClienteRow,
+} from './types/points.types.js';
 
 @Injectable()
 export class PointsService {
   constructor(
-    private readonly db: DataSource,
+    @InjectRepository(PointsMovement)
+    private readonly records: Repository<PointsMovement>,
     private readonly idem: ParticipationIdempotencyService,
-    private readonly persistence: PointsRepository = new PointsRepository(),
+    private readonly auditLog: AuditService,
+    private readonly operationalContext: OperationalContextService,
+    private readonly authorization: AuthorizationService,
   ) {}
-  async current(m: EntityManager = this.db.manager) {
-    const [r] = await this.persistence.currentFindConfiguracionPuntos(m);
+
+  async current(m: EntityManager = this.records.manager) {
+    const [r] = await this.currentFindConfiguracionPuntos(m);
     return r;
   }
+
   async publicSettings() {
     const { configuredBy: _actor, ...settings } = await this.current();
     return settings;
   }
+
   async configure(
     enabled: boolean,
     rate: number,
@@ -56,7 +63,7 @@ export class PointsService {
       200,
       'configuracion_puntos',
       async (m) => {
-        const [s] = await this.persistence.configureFindRolPermiso(m, {
+        const [s] = await this.configureFindRolPermiso(m, {
           userId: actor.userId,
           sessionId: actor.sessionId,
         });
@@ -65,19 +72,16 @@ export class PointsService {
         if (!s.allowed) throw new ForbiddenException('Permiso insuficiente.');
       },
       async (m) => {
-        await lockTableOperations(m);
+        await this.operationalContext.lockTableOperations(m);
         const old = await this.current(m);
-        const [row] = await this.persistence.configureInsertConfiguracionPuntos(
-          m,
-          {
-            version: old.version + 1,
-            enabled: enabled,
-            rate: rate,
-            userId: actor.userId,
-          },
-        );
+        const [row] = await this.configureInsertConfiguracionPuntos(m, {
+          version: old.version + 1,
+          enabled,
+          rate,
+          userId: actor.userId,
+        });
         const result = await this.current(m);
-        await auditTableOperation(
+        await this.auditLog.append(
           m,
           { userId: actor.userId },
           'configuracion_puntos',
@@ -89,108 +93,11 @@ export class PointsService {
       },
     );
   }
-  async recordConfirmedPayment(m: EntityManager, paymentId: string) {
-    const [p] =
-      await this.persistence.recordConfirmedPaymentFindDetalleLiquidacion(m, {
-        paymentId: paymentId,
-      });
-    if (!p || p.estado !== 'confirmed' || !p.id_cliente || !p.registered)
-      return;
-    const settings = await this.current(m);
-    if (!settings.enabled) return;
-    const cents = BigInt(p.products);
-    const points = calculateEarnedPoints(cents, settings.pointsPerDollar);
-    if (points > BigInt(Number.MAX_SAFE_INTEGER))
-      throw new ConflictException('Puntos exceden el rango permitido.');
-    await this.persistence.recordConfirmedPaymentFindCliente(m, {
-      id_cliente: p.id_cliente,
-    });
-    const state = p.modalidad === 'delivery' ? 'pending' : 'credited';
-    const [a] =
-      await this.persistence.recordConfirmedPaymentInsertAcumulacionPuntos(m, {
-        paymentId: paymentId,
-        id_cliente: p.id_cliente,
-        version: settings.version,
-        productsCents: cents.toString(),
-        points: points.toString(),
-        state: state,
-      });
-    await this.balance(p.id_cliente, m);
-    if (a)
-      await auditTableOperation(
-        m,
-        {},
-        'acumulacion_puntos',
-        a.id,
-        'points.snapshot',
-        { paymentId, points: Number(points), state },
-      );
-    if (a && state === 'credited' && points > 0n) {
-      await this.persistence.recordConfirmedPaymentInsertMovimientoPuntos(m, {
-        id_cliente: p.id_cliente,
-        id: a.id,
-        points: points.toString(),
-      });
-      await auditTableOperation(
-        m,
-        {},
-        'movimiento_puntos',
-        a.id,
-        'points.earned',
-        { paymentId, points: Number(points) },
-      );
-    }
-  }
-  async deliverOrder(m: EntityManager, orderId: string, actor: string) {
-    const rows = await this.persistence.deliverOrderUpdateAcumulacionPuntos(m, {
-      orderId: orderId,
-    });
-    const a = rows[0];
-    if (a && Number(a.puntos) > 0) {
-      await this.persistence.recordConfirmedPaymentInsertMovimientoPuntos(m, {
-        id_cliente: a.id_cliente,
-        id: a.id_acumulacion,
-        points: a.puntos,
-      });
-      await this.balance(a.id_cliente, m);
-      await auditTableOperation(
-        m,
-        { userId: actor },
-        'movimiento_puntos',
-        a.id_acumulacion,
-        'points.earned',
-        { paymentId: a.id_pago, points: Number(a.puntos) },
-      );
-    }
-  }
-  async refund(m: EntityManager, refundId: string, actor: string) {
-    const [a] = await this.persistence.refundFindAcumulacionPuntos(m, {
-      refundId: refundId,
-    });
-    if (!a || Number(a.puntos) === 0) return;
-    await this.persistence.recordConfirmedPaymentFindCliente(m, {
-      id_cliente: a.id_cliente,
-    });
-    await this.persistence.refundInsertMovimientoPuntos(m, {
-      id_cliente: a.id_cliente,
-      id_acumulacion: a.id_acumulacion,
-      refundId: refundId,
-      puntos: a.puntos,
-    });
-    await auditTableOperation(
-      m,
-      { userId: actor },
-      'movimiento_puntos',
-      refundId,
-      'points.refund_adjusted',
-      { points: Number(a.puntos) },
-    );
-    await this.balance(a.id_cliente, m);
-  }
-  async balance(clientId: string, m: EntityManager = this.db.manager) {
+
+  async balance(clientId: string, m: EntityManager = this.records.manager) {
     await this.requireClient(clientId, m);
-    const [r] = await this.persistence.balanceFindMovimientoPuntos(m, {
-      clientId: clientId,
+    const [r] = await this.balanceFindMovimientoPuntos(m, {
+      clientId,
     });
     if (
       ![r.balance, r.pending, r.reserved].every((v) =>
@@ -208,15 +115,140 @@ export class PointsService {
       availablePoints: Number(available > 0n ? available : 0n),
     };
   }
-  private async requireClient(id: string, m: EntityManager = this.db.manager) {
-    const [c] = await this.persistence.requireClientFindCliente(m, { id: id });
+
+  private async requireClient(
+    id: string,
+    m: EntityManager = this.records.manager,
+  ) {
+    const [c] = await this.requireClientFindCliente(m, { id });
     if (!c) throw new NotFoundException('Cliente no encontrado.');
   }
+
   async movements(
     clientId: string,
     q: { page: number; limit: number; type?: string; paymentId?: string },
   ) {
     await this.requireClient(clientId);
-    return this.persistence.movements(this.db.manager, clientId, q);
+    return this.queryMovements(this.records.manager, clientId, q);
+  }
+
+  private async currentFindConfiguracionPuntos(
+    manager: EntityManager,
+  ): Promise<CurrentFindConfiguracionPuntosRow[]> {
+    return manager
+      .getRepository(PointsSettings)
+      .createQueryBuilder('configuracion_puntos')
+      .select(
+        'version, habilitado AS enabled, tasa_por_dolar AS "pointsPerDollar", configurada_por AS "configuredBy", creada_en AS "createdAt"',
+      )
+      .addOrderBy('version', 'DESC')
+      .limit(1)
+      .getRawMany<CurrentFindConfiguracionPuntosRow>();
+  }
+
+  private async configureFindRolPermiso(
+    manager: EntityManager,
+    input: { userId: string; sessionId: string },
+  ): Promise<ConfigureFindRolPermisoRow[]> {
+    const row = await this.authorization.lockSession(
+      manager,
+      input.userId,
+      input.sessionId,
+      'points.configure',
+    );
+    return row ? [row] : [];
+  }
+
+  private async configureInsertConfiguracionPuntos(
+    manager: EntityManager,
+    input: { version: number; enabled: boolean; rate: number; userId: string },
+  ): Promise<ConfigureInsertConfiguracionPuntosRow[]> {
+    return manager
+      .getRepository(PointsSettings)
+      .createQueryBuilder()
+      .insert()
+      .values([
+        {
+          version: input.version,
+          habilitado: input.enabled,
+          tasa_por_dolar: input.rate,
+          configurada_por: input.userId,
+        },
+      ])
+      .returning('id_configuracion id')
+      .execute()
+      .then((result) => result.raw);
+  }
+
+  private async balanceFindMovimientoPuntos(
+    manager: EntityManager,
+    input: { clientId: string },
+  ): Promise<BalanceFindMovimientoPuntosRow[]> {
+    return manager
+      .createQueryBuilder()
+      .select(
+        "COALESCE((SELECT sum(puntos) FROM movimiento_puntos WHERE id_cliente=:clientId),0)::text balance, COALESCE((SELECT sum(puntos) FROM acumulacion_puntos WHERE id_cliente=:clientId AND estado='pending'),0)::text pending, COALESCE((SELECT sum(puntos) FROM reserva_puntos_canje WHERE id_cliente=:clientId AND estado='active'),0)::text reserved",
+      )
+      .from('(SELECT 1)', '_singleton')
+      .setParameters({ clientId: input.clientId })
+      .getRawMany<BalanceFindMovimientoPuntosRow>();
+  }
+
+  private async requireClientFindCliente(
+    manager: EntityManager,
+    input: { id: string },
+  ): Promise<RequireClientFindClienteRow[]> {
+    return manager
+      .getRepository(Client)
+      .createQueryBuilder('cliente')
+      .select('1 AS "1"')
+      .where('id_cliente=:id')
+      .setParameters({ id: input.id })
+      .getRawMany<RequireClientFindClienteRow>();
+  }
+
+  private async queryMovements(
+    manager: EntityManager,
+    clientId: string,
+    q: { page: number; limit: number; type?: string; paymentId?: string },
+  ) {
+    const args = [clientId, q.type ?? null, q.paymentId ?? null];
+    const queryValues1: unknown[] = args;
+    const queryParameters1 = Object.fromEntries(
+      queryValues1.map((value, index) => ['p' + (index + 1), value]),
+    );
+    const [{ total }] = await manager
+      .getRepository(PointsMovement)
+      .createQueryBuilder('m')
+      .select('count(*)::int total')
+      .leftJoin(PointsAccrual, 'a', 'a.id_acumulacion=m.id_acumulacion')
+      .leftJoin(RedemptionRequest, 'sc', 'sc.id_canje=m.id_canje')
+      .where(
+        'm.id_cliente=:p1 AND (:p2::text IS NULL OR m.tipo=:p2) AND (:p3::uuid IS NULL OR a.id_pago=:p3)',
+      )
+      .setParameters(queryParameters1)
+      .getRawMany();
+    const queryValues2: unknown[] = [...args, q.limit, (q.page - 1) * q.limit];
+    const queryParameters2 = Object.fromEntries(
+      queryValues2.map((value, index) => ['p' + (index + 1), value]),
+    );
+    const items = await manager
+      .getRepository(PointsMovement)
+      .createQueryBuilder('m')
+      .select(
+        'm.id_movimiento id, m.tipo type, m.puntos::float8 points, COALESCE(sc.id_pedido,(SELECT o.id_pedido FROM pedido o JOIN liquidacion l ON l.id_cuenta=o.id_cuenta JOIN pago p ON p.id_liquidacion=l.id_liquidacion WHERE p.id_pago=a.id_pago AND o.modalidad=\'delivery\' LIMIT 1)) AS "orderId", a.id_pago "paymentId", m.id_canje "redemptionId", m.creado_en "createdAt"',
+      )
+      .leftJoin(PointsAccrual, 'a', 'a.id_acumulacion=m.id_acumulacion')
+      .leftJoin(RedemptionRequest, 'sc', 'sc.id_canje=m.id_canje')
+      .where(
+        'm.id_cliente=:p1 AND (:p2::text IS NULL OR m.tipo=:p2) AND (:p3::uuid IS NULL OR a.id_pago=:p3)',
+      )
+      .addOrderBy('m.creado_en', 'DESC')
+      .addOrderBy('m.id_movimiento', 'DESC')
+      .limit(Number(queryValues2[3]))
+      .offset(Number(queryValues2[4]))
+      .setParameters(queryParameters2)
+      .getRawMany();
+    return { items, total, page: q.page, limit: q.limit };
   }
 }

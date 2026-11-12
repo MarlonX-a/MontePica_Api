@@ -4,19 +4,31 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
-import { DataSource } from 'typeorm';
-import type { UpdateTableDto } from './dto/participation.dto.js';
-import { hashAccessSecret } from './guest-sessions.service.js';
-import { TablesRepository } from './repositories/tables.repository.js';
-import { auditTableOperation } from './table-audit.js';
-import { lockActiveVisit, lockTableOperations } from './table-operations.js';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
+import { AuditService } from '../common/audit/audit.service.js';
+import { OperationalContextService } from '../common/transactions/operational-context.service.js';
+import { TableVisit } from '../visits/entities/table-visit.entity.js';
+import { type UpdateTableDto } from './dto/update-table.dto.js';
+import { RestaurantTable } from './entities/restaurant-table.entity.js';
+import {
+  CreateTableInsertMesaRow,
+  TableFindMesaRow,
+  TablesFindMesaNextRow,
+  TablesFindMesaRow,
+  UpdateTableFindMesaRow,
+  UpdateTableFindVisitaMesaRow,
+  UpdateTableUpdateMesaRow,
+} from './types/tables.types.js';
 
 @Injectable()
 export class TablesService {
   constructor(
+    @InjectRepository(RestaurantTable)
+    private readonly records: Repository<RestaurantTable>,
     private readonly db: DataSource,
-    private readonly persistence: TablesRepository = new TablesRepository(),
+    private readonly auditLog: AuditService,
+    private readonly operationalContext: OperationalContextService,
   ) {}
 
   async createTable(code: string, actor: string) {
@@ -27,10 +39,10 @@ export class TablesService {
       );
     try {
       return await this.db.transaction(async (manager) => {
-        const [table] = await this.persistence.createTableInsertMesa(manager, {
-          normalizedCode: normalizedCode,
+        const [table] = await this.createTableInsertMesa(manager, {
+          normalizedCode,
         });
-        await auditTableOperation(
+        await this.auditLog.append(
           manager,
           { userId: actor },
           'mesa',
@@ -48,19 +60,17 @@ export class TablesService {
   }
 
   async tables(page = 1, limit = 20) {
-    const items = await this.persistence.tablesFindMesa(this.db.manager, {
-      limit: limit,
+    const items = await this.tablesFindMesa(this.records.manager, {
+      limit,
       offset: (page - 1) * limit,
     });
-    const [{ total }] = await this.persistence.tablesFindMesaNext(
-      this.db.manager,
-    );
+    const [{ total }] = await this.tablesFindMesaNext(this.records.manager);
     return { items, total, page, limit };
   }
 
   async table(id: string) {
-    const [table] = await this.persistence.tableFindMesa(this.db.manager, {
-      id: id,
+    const [table] = await this.tableFindMesa(this.records.manager, {
+      id,
     });
     if (!table) throw new NotFoundException('Mesa no encontrada.');
     return table;
@@ -75,26 +85,26 @@ export class TablesService {
       );
     try {
       return await this.db.transaction(async (m) => {
-        await lockTableOperations(m);
-        const [before] = await this.persistence.updateTableFindMesa(m, {
-          id: id,
+        await this.operationalContext.lockTableOperations(m);
+        const [before] = await this.updateTableFindMesa(m, {
+          id,
         });
         if (!before) throw new NotFoundException('Mesa no encontrada.');
         if (dto.active === false) {
-          const visits = await this.persistence.updateTableFindVisitaMesa(m, {
-            id: id,
+          const visits = await this.updateTableFindVisitaMesa(m, {
+            id,
           });
           if (visits.length)
             throw new ConflictException(
               'No se puede desactivar una mesa con visita abierta.',
             );
         }
-        const [after] = await this.persistence.updateTableUpdateMesa(m, {
-          id: id,
+        const [after] = await this.updateTableUpdateMesa(m, {
+          id,
           code: dto.code?.toUpperCase() ?? before.code,
           active: dto.active ?? before.active,
         });
-        await auditTableOperation(
+        await this.auditLog.append(
           m,
           { userId: actor },
           'mesa',
@@ -111,76 +121,119 @@ export class TablesService {
     }
   }
 
-  async openVisit(tableId: string, actor: string) {
-    return this.db.transaction(async (manager) => {
-      const timeZone = await lockTableOperations(manager);
-      const [day] = await this.persistence.openVisitFindJornadaOperativa(
-        manager,
-        { timeZone: timeZone },
-      );
-      if (!day) throw new ConflictException('No hay jornada abierta para hoy.');
-      const [table] = await this.persistence.openVisitFindMesa(manager, {
-        tableId: tableId,
-      });
-      if (!table) throw new NotFoundException('Mesa no encontrada.');
-      if (!table.active) throw new ConflictException('Mesa inactiva.');
-      const [{ current }] =
-        await this.persistence.openVisitFindJornadaOperativaNext(manager, {
-          id: day.id,
-          timeZone: timeZone,
-        });
-      if (!current)
-        throw new ConflictException(
-          'Cambió la fecha operativa; abre la jornada actual.',
-        );
-      const existing = await this.persistence.openVisitFindVisitaMesa(manager, {
-        tableId: tableId,
-      });
-      if (existing.length)
-        throw new ConflictException('La mesa ya tiene una visita abierta.');
-      const [visit] = await this.persistence.openVisitInsertVisitaMesa(
-        manager,
-        { tableId: tableId, id: day.id, actor: actor },
-      );
-      await this.persistence.openVisitUpdateMesa(manager, { tableId: tableId });
-      await auditTableOperation(
-        manager,
-        { userId: actor },
-        'visita_mesa',
-        visit.id,
-        'visit.opened',
-        { tableId, operatingDayId: day.id },
-      );
-      return visit;
-    });
+  private async createTableInsertMesa(
+    manager: EntityManager,
+    input: { normalizedCode: string },
+  ): Promise<CreateTableInsertMesaRow[]> {
+    return manager
+      .getRepository(RestaurantTable)
+      .createQueryBuilder()
+      .insert()
+      .values([{ codigo: input.normalizedCode }])
+      .returning('"id_mesa" AS id,"codigo" AS code,"activa" AS active')
+      .execute()
+      .then((result) => result.raw);
   }
 
-  async issueQr(visitId: string, actor: string) {
-    return this.db.transaction(async (manager) => {
-      const timeZone = await lockTableOperations(manager);
-      const table = await lockActiveVisit(manager, visitId, timeZone);
-      const token = randomBytes(32).toString('base64url');
-      const [row] = await this.persistence.issueQrUpdateMesa(manager, {
-        id: table.id,
-        token: hashAccessSecret(token),
-      });
-      const cancelled = await this.persistence.issueQrUpdateParticipante(
-        manager,
-        { visitId: visitId },
-      );
-      await auditTableOperation(
-        manager,
-        { userId: actor },
-        'visita_mesa',
-        visitId,
-        'visit.qr_issued',
-        {
-          tableId: table.id,
-          qrVersion: row.qrVersion,
-          cancelledParticipantIds: cancelled.map((p: { id: string }) => p.id),
-        },
-      );
-      return { visitId, qrToken: token, qrVersion: row.qrVersion };
-    });
+  private async tablesFindMesa(
+    manager: EntityManager,
+    input: { limit: number; offset: number },
+  ): Promise<TablesFindMesaRow[]> {
+    return manager
+      .getRepository(RestaurantTable)
+      .createQueryBuilder('m')
+      .select([
+        'm."id_mesa" AS id',
+        'm."codigo" AS code',
+        'm."activa" AS active',
+        'v."id_visita" AS "openVisitId"',
+      ])
+      .leftJoin(
+        TableVisit,
+        'v',
+        'v."id_mesa"=m."id_mesa" AND v."estado"=\'open\'',
+      )
+      .addOrderBy('m."codigo"', 'ASC')
+      .addOrderBy('m."id_mesa"', 'ASC')
+      .limit(Number(input.limit))
+      .offset(Number(input.offset))
+      .getRawMany<TablesFindMesaRow>();
+  }
+
+  private async tablesFindMesaNext(
+    manager: EntityManager,
+  ): Promise<TablesFindMesaNextRow[]> {
+    return manager
+      .getRepository(RestaurantTable)
+      .createQueryBuilder('mesa')
+      .select('count(*)::int AS total')
+      .getRawMany<TablesFindMesaNextRow>();
+  }
+
+  private async tableFindMesa(
+    manager: EntityManager,
+    input: { id: string },
+  ): Promise<TableFindMesaRow[]> {
+    return manager
+      .getRepository(RestaurantTable)
+      .createQueryBuilder('m')
+      .select([
+        'm."id_mesa" AS id',
+        'm."codigo" AS code',
+        'm."activa" AS active',
+        'v."id_visita" AS "openVisitId"',
+      ])
+      .leftJoin(
+        TableVisit,
+        'v',
+        'v."id_mesa"=m."id_mesa" AND v."estado"=\'open\'',
+      )
+      .where('m."id_mesa"=:id')
+      .setParameters({ id: input.id })
+      .getRawMany<TableFindMesaRow>();
+  }
+
+  private async updateTableFindMesa(
+    manager: EntityManager,
+    input: { id: string },
+  ): Promise<UpdateTableFindMesaRow[]> {
+    return manager
+      .getRepository(RestaurantTable)
+      .createQueryBuilder('mesa')
+      .select(['"id_mesa" AS id', '"codigo" AS code', '"activa" AS active'])
+      .where('"id_mesa"=:id')
+      .setLock('pessimistic_write', undefined, undefined)
+      .setParameters({ id: input.id })
+      .getRawMany<UpdateTableFindMesaRow>();
+  }
+
+  private async updateTableFindVisitaMesa(
+    manager: EntityManager,
+    input: { id: string },
+  ): Promise<UpdateTableFindVisitaMesaRow[]> {
+    return manager
+      .getRepository(TableVisit)
+      .createQueryBuilder('visita_mesa')
+      .select('1 AS "1"')
+      .where('"id_mesa"=:id AND "estado"=\'open\'')
+      .setParameters({ id: input.id })
+      .getRawMany<UpdateTableFindVisitaMesaRow>();
+  }
+
+  private async updateTableUpdateMesa(
+    manager: EntityManager,
+    input: { id: string; code: string; active: boolean },
+  ): Promise<UpdateTableUpdateMesaRow[]> {
+    const rows = await manager
+      .getRepository(RestaurantTable)
+      .createQueryBuilder()
+      .update(RestaurantTable)
+      .set({ codigo: input.code, activa: input.active })
+      .where('"id_mesa"=:id')
+      .returning('"id_mesa" AS id,"codigo" AS code,"activa" AS active')
+      .setParameters({ id: input.id })
+      .execute()
+      .then((result) => result.raw);
+    return rows;
   }
 }

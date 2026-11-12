@@ -6,10 +6,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Request } from 'express';
+import { type Request } from 'express';
+import { AccessIdentityService } from './access-identity.service.js';
 import { AuthenticatedRequestContext } from './auth.types.js';
 import { REQUIRED_PERMISSION } from './permissions.decorator.js';
-import { AccessIdentityService } from './access-identity.service.js';
 
 type RequestWithAuth = Request & { authContext?: AuthenticatedRequestContext };
 

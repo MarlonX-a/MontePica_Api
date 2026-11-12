@@ -1,12 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-
-export class ProductCategoryResponseDto {
-  @ApiProperty({ format: 'uuid' })
-  id: string;
-
-  @ApiProperty()
-  name: string;
-}
+import { ProductCategoryResponseDto } from './product-category-response.dto.js';
 
 export class ProductResponseDto {
   @ApiProperty({ format: 'uuid' })
@@ -38,18 +31,4 @@ export class ProductResponseDto {
 
   @ApiProperty({ minimum: 0 })
   sortOrder: number;
-}
-
-export class PaginatedProductsResponseDto {
-  @ApiProperty({ type: [ProductResponseDto] })
-  items: ProductResponseDto[];
-
-  @ApiProperty({ minimum: 0 })
-  total: number;
-
-  @ApiProperty({ minimum: 1 })
-  page: number;
-
-  @ApiProperty({ minimum: 1, maximum: 100 })
-  limit: number;
 }

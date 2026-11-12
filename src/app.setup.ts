@@ -1,4 +1,4 @@
-import { ValidationPipe, type INestApplication } from '@nestjs/common';
+import { type INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter.js';
@@ -26,7 +26,12 @@ export function configureApp(app: INestApplication): void {
       'access-token',
     )
     .addBearerAuth(
-      { type: 'http', scheme: 'bearer', description: 'JWT de cliente registrado o token opaco guest_ de invitado.' },
+      {
+        type: 'http',
+        scheme: 'bearer',
+        description:
+          'JWT de cliente registrado o token opaco guest_ de invitado.',
+      },
       'client-token',
     )
     .build();

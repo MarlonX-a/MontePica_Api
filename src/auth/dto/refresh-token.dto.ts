@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, Matches, Length } from 'class-validator';
+import { IsString, Length, Matches } from 'class-validator';
 
 export class RefreshTokenDto {
   @ApiProperty({ minLength: 43, maxLength: 43, writeOnly: true })

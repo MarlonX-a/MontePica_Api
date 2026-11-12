@@ -4,9 +4,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-
-import { PermissionsGuard } from './permissions.guard.js';
 import { AccessIdentityService } from './access-identity.service.js';
+import { PermissionsGuard } from './permissions.guard.js';
 
 describe('PermissionsGuard', () => {
   const reflector = { getAllAndOverride: vi.fn() } as unknown as Reflector;

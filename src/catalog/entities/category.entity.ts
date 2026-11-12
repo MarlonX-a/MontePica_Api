@@ -6,7 +6,12 @@ export class Category {
   @PrimaryGeneratedColumn('uuid', { name: 'id_categoria' })
   id: string;
 
-  @Column({ name: 'nombre_normalizado', type: 'varchar', length: 160, unique: true })
+  @Column({
+    name: 'nombre_normalizado',
+    type: 'varchar',
+    length: 160,
+    unique: true,
+  })
   normalizedName: string;
 
   @Column({ name: 'nombre', type: 'varchar', length: 160 })
@@ -17,5 +22,4 @@ export class Category {
 
   @Column({ name: 'orden', type: 'integer', default: 0 })
   sortOrder: number;
-
 }

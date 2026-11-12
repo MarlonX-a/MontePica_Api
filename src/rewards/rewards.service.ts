@@ -3,90 +3,60 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { DataSource, EntityManager } from 'typeorm';
-import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
-import type { ClientIdentity } from '../tables/client-access.guard.js';
-import { ParticipationIdempotencyService } from '../tables/participation-idempotency.service.js';
-import { auditTableOperation } from '../tables/table-audit.js';
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, Repository } from 'typeorm';
+import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
+import { Category } from '../catalog/entities/category.entity.js';
+import { Product } from '../catalog/entities/product.entity.js';
+import { AuditService } from '../common/audit/audit.service.js';
+import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
+import { AuthorizationService } from '../common/identity/authorization.service.js';
+import { OperationalContextService } from '../common/transactions/operational-context.service.js';
+import { type RewardCreateDto } from './dto/reward-create.dto.js';
+import { type RewardListDto } from './dto/reward-list.dto.js';
+import { type RewardUpdateDto } from './dto/reward-update.dto.js';
+import { Reward } from './entities/reward.entity.js';
 import {
-  lockActiveVisit,
-  lockTableOperations,
-} from '../tables/table-operations.js';
-import { RewardsRepository } from './repositories/rewards.repository.js';
-import type {
-  AdminRedemptionListDto,
-  CreateRedemptionDto,
-  RedemptionListDto,
-  RewardCreateDto,
-  RewardListDto,
-  RewardUpdateDto,
-} from './rewards.dto.js';
+  CreateRewardFindProductoRow,
+  CreateRewardInsertRecompensaRow,
+  rewardFields,
+  RewardFindRecompensaRow,
+  StaffFindRolPermisoRow,
+  UpdateRewardFindRecompensaRow,
+  UpdateRewardUpdateRecompensaRow,
+} from './types/rewards.types.js';
 
 type Actor = { userId?: string; guestSessionId?: string; sessionId?: string };
 
 @Injectable()
 export class RewardsService {
-  private readonly logger = new Logger(RewardsService.name);
-  private expiryTimer?: ReturnType<typeof setInterval>;
-  private expiryRunning = false;
   constructor(
-    private readonly db: DataSource,
+    @InjectRepository(Reward) private readonly records: Repository<Reward>,
     private readonly idem: ParticipationIdempotencyService,
-    private readonly persistence: RewardsRepository = new RewardsRepository(),
+    private readonly auditLog: AuditService,
+    private readonly operationalContext: OperationalContextService,
+    private readonly authorization: AuthorizationService,
   ) {}
-
-  onModuleInit() {
-    void this.expirePending().catch((error) =>
-      this.logger.error(
-        'No se pudieron procesar los vencimientos de canjes.',
-        error instanceof Error ? error.stack : undefined,
-      ),
-    );
-    this.expiryTimer = setInterval(
-      () =>
-        void this.expirePending().catch((error) =>
-          this.logger.error(
-            'Falló el ciclo de vencimientos de canjes.',
-            error instanceof Error ? error.stack : undefined,
-          ),
-        ),
-      60_000,
-    );
-    this.expiryTimer.unref?.();
-  }
-  onModuleDestroy() {
-    if (this.expiryTimer) clearInterval(this.expiryTimer);
-  }
 
   async staff(
     m: EntityManager,
     actor: AuthenticatedRequestContext,
     permission: string,
   ) {
-    const [s] = await this.persistence.staffFindRolPermiso(m, {
+    const [s] = await this.staffFindRolPermiso(m, {
       userId: actor.userId,
       sessionId: actor.sessionId,
-      permission: permission,
+      permission,
     });
     if (!s || !s.activo || s.revocada_en || !s.valid)
       throw new UnauthorizedException('Sesión inválida.');
     if (!s.allowed) throw new ForbiddenException('Permiso insuficiente.');
     return s.role as string;
   }
-  private async client(m: EntityManager, actor: ClientIdentity) {
-    if (!actor.userId)
-      throw new UnauthorizedException('Se requiere una cuenta registrada.');
-    const [s] = await this.persistence.clientFindCliente(m, {
-      clientId: actor.clientId,
-      userId: actor.userId,
-      userSessionId: actor.userSessionId,
-    });
-    if (!s) throw new UnauthorizedException('Sesión inválida.');
-  }
+
   private user(actor: Actor) {
     if (!actor.userId)
       throw new UnauthorizedException('Se requiere sesión de personal.');
@@ -107,12 +77,12 @@ export class RewardsService {
       'recompensa',
       (m) => this.staff(m, actor, 'rewards.manage').then(() => undefined),
       async (m) => {
-        await lockTableOperations(m);
-        const [product] = await this.persistence.createRewardFindProducto(m, {
+        await this.operationalContext.lockTableOperations(m);
+        const [product] = await this.createRewardFindProducto(m, {
           productId: dto.productId,
         });
         if (!product) throw new NotFoundException('Producto no encontrado.');
-        const [row] = await this.persistence.createRewardInsertRecompensa(m, {
+        const [row] = await this.createRewardInsertRecompensa(m, {
           name: dto.name,
           description: dto.description ?? null,
           productId: dto.productId,
@@ -120,7 +90,7 @@ export class RewardsService {
           active: dto.active,
           sortOrder: dto.sortOrder,
         });
-        await auditTableOperation(
+        await this.auditLog.append(
           m,
           this.user(actor),
           'recompensa',
@@ -141,6 +111,7 @@ export class RewardsService {
       },
     );
   }
+
   async updateReward(
     id: string,
     dto: RewardUpdateDto,
@@ -163,26 +134,23 @@ export class RewardsService {
       'recompensa',
       (m) => this.staff(m, actor, 'rewards.manage').then(() => undefined),
       async (m) => {
-        await lockTableOperations(m);
-        const [old] = await this.persistence.updateRewardFindRecompensa(m, {
-          id: id,
+        await this.operationalContext.lockTableOperations(m);
+        const [old] = await this.updateRewardFindRecompensa(m, {
+          id,
         });
         if (!old) throw new NotFoundException('Recompensa no encontrada.');
         if (old.version !== dto.expectedVersion)
           throw new ConflictException('La versión de la recompensa cambió.');
-        const updatedRows = await this.persistence.updateRewardUpdateRecompensa(
-          m,
-          {
-            id: id,
-            name: dto.name,
-            description: dto.description !== undefined,
-            description4: dto.description ?? null,
-            pointsCost: dto.pointsCost,
-            active: dto.active,
-            sortOrder: dto.sortOrder,
-          },
-        );
-        await auditTableOperation(
+        const updatedRows = await this.updateRewardUpdateRecompensa(m, {
+          id,
+          name: dto.name,
+          description: dto.description !== undefined,
+          description4: dto.description ?? null,
+          pointsCost: dto.pointsCost,
+          active: dto.active,
+          sortOrder: dto.sortOrder,
+        });
+        await this.auditLog.append(
           m,
           this.user(actor),
           'recompensa',
@@ -207,12 +175,13 @@ export class RewardsService {
       },
     );
   }
+
   private async reward(
     id: string,
     admin: boolean,
-    m: EntityManager = this.db.manager,
+    m: EntityManager = this.records.manager,
   ) {
-    const [r] = await this.persistence.rewardFindRecompensa(m, { id: id });
+    const [r] = await this.rewardFindRecompensa(m, { id });
     if (
       !r ||
       (!admin &&
@@ -227,573 +196,224 @@ export class RewardsService {
     delete r.category_active;
     return r;
   }
+
   async listRewards(q: RewardListDto, admin = false) {
-    return this.persistence.listRewards(this.db.manager, q, admin);
+    return this.queryListRewards(this.records.manager, q, admin);
   }
+
   publicReward(id: string) {
     return this.reward(id, false);
   }
+
   adminReward(id: string) {
     return this.reward(id, true);
   }
 
-  async request(
-    visitId: string,
-    dto: CreateRedemptionDto,
-    client: ClientIdentity,
-    key?: string,
-  ) {
-    const actor = this.user({ userId: client.userId });
-    return this.idem.run(
-      actor,
-      `visits/${visitId.toLowerCase()}/redemptions`,
-      key,
-      dto,
-      201,
-      'solicitud_canje',
-      async (m) => {
-        await this.client(m, client);
-        const [own] = await this.persistence.requestFindParticipante(m, {
-          visitId: visitId,
-          clientId: client.clientId,
-        });
-        if (!own) throw new NotFoundException('Participación no encontrada.');
-      },
-      async (m) => {
-        const zone = await lockTableOperations(m);
-        await lockActiveVisit(m, visitId, zone);
-        const [participant] =
-          await this.persistence.requestFindParticipanteNext(m, {
-            visitId: visitId,
-            clientId: client.clientId,
-          });
-        if (!participant)
-          throw new NotFoundException('Participación no encontrada.');
-        if (
-          participant.status !== 'approved' ||
-          participant.account_status !== 'open'
-        )
-          throw new ConflictException(
-            'Se requiere una participación aprobada y cuenta abierta.',
-          );
-        const [cash] = await this.persistence.requestFindCaja(m, {
-          dayId: participant.dayId,
-        });
-        if (cash?.estado === 'closed')
-          throw new ConflictException('La caja de la jornada ya fue cerrada.');
-        const [bill] = await this.persistence.requestFindLiquidacion(m, {
-          account: participant.account,
-        });
-        if (bill)
-          throw new ConflictException(
-            'La cuenta tiene una liquidación pendiente.',
-          );
-        const [reward] = await this.persistence.requestFindRecompensa(m, {
-          rewardId: dto.rewardId,
-        });
-        if (!reward) throw new NotFoundException('Recompensa no disponible.');
-        if (reward.version !== dto.rewardVersion)
-          throw new ConflictException('La versión de la recompensa cambió.');
-        await this.persistence.requestFindCliente(m, {
-          clientId: client.clientId,
-        });
-        const [bal] = await this.persistence.requestFindMovimientoPuntos(m, {
-          clientId: client.clientId,
-        });
-        const [reserved] = await this.persistence.requestFindReservaPuntosCanje(
-          m,
-          { clientId: client.clientId },
-        );
-        if (
-          BigInt(bal.balance) - BigInt(reserved.total) <
-          BigInt(reward.costo_puntos)
-        )
-          throw new ConflictException('Puntos disponibles insuficientes.');
-        let stock: { id: string; available: number } | undefined;
-        if (reward.tracks) {
-          [stock] = await this.persistence.requestFindInventarioDiario(m, {
-            dayId: participant.dayId,
-            id_producto: reward.id_producto,
-          });
-          if (!stock || stock.available < 1)
-            throw new ConflictException(
-              'Inventario insuficiente o sin inicializar.',
-            );
-        }
-        const [canje] = await this.persistence.requestInsertSolicitudCanje(m, {
-          clientId: client.clientId,
-          id: participant.id,
-          account: participant.account,
-          visitId: visitId,
-          dayId: participant.dayId,
-          rewardId: dto.rewardId,
-          version: reward.version,
-          id_producto: reward.id_producto,
-          tracks: reward.tracks,
-          costo_puntos: reward.costo_puntos,
-          userId: client.userId,
-        });
-        await this.persistence.requestInsertReservaPuntosCanje(m, {
-          id: canje.id,
-          clientId: client.clientId,
-          costo_puntos: reward.costo_puntos,
-        });
-        if (reward.tracks) {
-          await this.persistence.requestUpdateInventarioDiario(m, {
-            id: stock!.id,
-          });
-          await this.persistence.requestInsertReservaInventarioCanje(m, {
-            id: canje.id,
-            id2: stock!.id,
-          });
-        }
-        await this.history(m, canje.id, client.userId, 'redemption.requested', {
-          rewardId: dto.rewardId,
-          points: Number(reward.costo_puntos),
-          tracksInventory: reward.tracks,
-        });
-        await auditTableOperation(
-          m,
-          actor,
-          'solicitud_canje',
-          canje.id,
-          'redemption.requested',
-          {
-            clientId: client.clientId,
-            rewardId: dto.rewardId,
-            points: Number(reward.costo_puntos),
-          },
-        );
-        return {
-          resourceId: canje.id,
-          response: await this.redemption(canje.id, client.clientId, m),
-        };
-      },
+  private async staffFindRolPermiso(
+    manager: EntityManager,
+    input: { userId: string; sessionId: string; permission: string },
+  ): Promise<StaffFindRolPermisoRow[]> {
+    const row = await this.authorization.lockSession(
+      manager,
+      input.userId,
+      input.sessionId,
+      input.permission,
     );
+    return row ? [row] : [];
   }
-  private async history(
-    m: EntityManager,
-    id: string,
-    user: string | undefined,
-    event: string,
-    detail: object = {},
-  ) {
-    await this.persistence.historyInsertHistorialCanje(m, {
-      id: id,
-      user: user ?? null,
-      event: event,
-      detail: JSON.stringify(detail),
-    });
+
+  private async createRewardFindProducto(
+    manager: EntityManager,
+    input: { productId: string },
+  ): Promise<CreateRewardFindProductoRow[]> {
+    return manager
+      .getRepository(Product)
+      .createQueryBuilder('producto')
+      .select('id_producto AS "id_producto"')
+      .where('id_producto=:productId')
+      .setLock('pessimistic_read', undefined, undefined)
+      .setParameters({ productId: input.productId })
+      .getRawMany<CreateRewardFindProductoRow>();
   }
-  async redemption(
-    id: string,
-    clientId?: string,
-    m: EntityManager = this.db.manager,
-    includeHistory = false,
-  ) {
-    const [r] = await this.persistence.redemptionFindSolicitudCanje(m, {
-      id: id,
-      clientId: clientId ?? null,
-    });
-    if (!r) throw new NotFoundException('Canje no encontrado.');
-    if (includeHistory)
-      r.history = await this.persistence.redemptionFindHistorialCanje(m, {
-        id: id,
-      });
-    return r;
+
+  private async createRewardInsertRecompensa(
+    manager: EntityManager,
+    input: {
+      name: string;
+      description: string | null;
+      productId: string;
+      pointsCost: number;
+      active: boolean;
+      sortOrder: number;
+    },
+  ): Promise<CreateRewardInsertRecompensaRow[]> {
+    return manager
+      .getRepository(Reward)
+      .createQueryBuilder()
+      .insert()
+      .values([
+        {
+          nombre: input.name,
+          descripcion: input.description,
+          id_producto: input.productId,
+          costo_puntos: String(input.pointsCost),
+          activa: input.active,
+          orden: input.sortOrder,
+        },
+      ])
+      .returning('id_recompensa id')
+      .execute()
+      .then((result) => result.raw);
   }
-  async listRedemptions(
-    q: RedemptionListDto | AdminRedemptionListDto,
-    clientId?: string,
+
+  private async updateRewardFindRecompensa(
+    manager: EntityManager,
+    input: { id: string },
+  ): Promise<UpdateRewardFindRecompensaRow[]> {
+    return manager
+      .getRepository(Reward)
+      .createQueryBuilder('recompensa')
+      .select([
+        '"recompensa"."id_recompensa" AS "id_recompensa"',
+        '"recompensa"."id_producto" AS "id_producto"',
+        '"recompensa"."orden" AS "orden"',
+        '"recompensa"."creada_en" AS "creada_en"',
+        '"recompensa"."descripcion" AS "descripcion"',
+        '"recompensa"."version" AS "version"',
+        '"recompensa"."activa" AS "activa"',
+        '"recompensa"."costo_puntos" AS "costo_puntos"',
+        '"recompensa"."nombre" AS "nombre"',
+        '"recompensa"."actualizada_en" AS "actualizada_en"',
+      ])
+      .where('id_recompensa=:id')
+      .setLock('pessimistic_write', undefined, undefined)
+      .setParameters({ id: input.id })
+      .getRawMany<UpdateRewardFindRecompensaRow>();
+  }
+
+  private async updateRewardUpdateRecompensa(
+    manager: EntityManager,
+    input: {
+      id: string;
+      name: string | undefined;
+      description: boolean;
+      description4: string | null;
+      pointsCost: number | undefined;
+      active: boolean | undefined;
+      sortOrder: number | undefined;
+    },
+  ): Promise<UpdateRewardUpdateRecompensaRow[]> {
+    const rows = await manager
+      .getRepository(Reward)
+      .createQueryBuilder()
+      .update(Reward)
+      .set({
+        nombre: () => 'COALESCE(:name,nombre)',
+        descripcion: () =>
+          'CASE WHEN :description THEN :description4 ELSE descripcion END',
+        costo_puntos: () => 'COALESCE(:pointsCost,costo_puntos)',
+        activa: () => 'COALESCE(:active,activa)',
+        orden: () => 'COALESCE(:sortOrder,orden)',
+        version: () => 'version+1',
+        actualizada_en: () => 'clock_timestamp()',
+      })
+      .where('id_recompensa=:id')
+      .returning('id_recompensa id')
+      .setParameters({
+        id: input.id,
+        name: input.name,
+        description: input.description,
+        description4: input.description4,
+        pointsCost: input.pointsCost,
+        active: input.active,
+        sortOrder: input.sortOrder,
+      })
+      .execute()
+      .then((result) => result.raw);
+    return rows;
+  }
+
+  private async rewardFindRecompensa(
+    manager: EntityManager,
+    input: { id: string },
+  ): Promise<RewardFindRecompensaRow[]> {
+    return manager
+      .getRepository(Reward)
+      .createQueryBuilder('r')
+      .select(
+        (
+          '' +
+          String(rewardFields) +
+          ',p.activo product_active,p.visible_menu product_visible,c.activa category_active'
+        ).replace(/\$(\d+)/g, ':p$1'),
+      )
+      .innerJoin(Product, 'p', 'p.id_producto=r.id_producto')
+      .leftJoin(Category, 'c', 'c.id_categoria=p.id_categoria')
+      .where('r.id_recompensa=:id')
+      .setParameters({ id: input.id })
+      .getRawMany<RewardFindRecompensaRow>();
+  }
+
+  private async queryListRewards(
+    manager: EntityManager,
+    q: RewardListDto,
+    admin = false,
   ) {
-    const { rows, total } = await this.persistence.listRedemptionIds(
-      this.db.manager,
-      q,
-      clientId,
+    const args = [
+      q.search ? `%${q.search}%` : null,
+      q.active ?? null,
+      q.productId ?? null,
+      admin,
+    ];
+    const queryValues1: unknown[] = args;
+    const queryParameters1 = Object.fromEntries(
+      queryValues1.map((value, index) => ['p' + (index + 1), value]),
     );
-    const items = await Promise.all(
-      rows.map((x: { id: string }) => this.redemption(x.id, clientId)),
+    const [{ total }] = await manager
+      .getRepository(Reward)
+      .createQueryBuilder('r')
+      .select('count(*)::int total')
+      .innerJoin(Product, 'p', 'p.id_producto=r.id_producto')
+      .leftJoin(Category, 'c', 'c.id_categoria=p.id_categoria')
+      .where(
+        '(:p4 OR (r.activa AND p.activo AND p.visible_menu AND c.activa)) AND (:p1::text IS NULL OR r.nombre ILIKE :p1 OR p.nombre ILIKE :p1) AND (:p2::boolean IS NULL OR r.activa=:p2) AND (:p3::uuid IS NULL OR r.id_producto=:p3)',
+      )
+      .setParameters(queryParameters1)
+      .getRawMany();
+    const queryValues2: unknown[] = [...args, q.limit, (q.page - 1) * q.limit];
+    const queryParameters2 = Object.fromEntries(
+      queryValues2.map((value, index) => ['p' + (index + 1), value]),
     );
+    const items = await manager
+      .getRepository(Reward)
+      .createQueryBuilder('r')
+      .select([
+        'r.id_recompensa AS id',
+        'r.nombre AS name',
+        'r.descripcion AS description',
+        'r.id_producto AS "productId"',
+        'r.costo_puntos::float8 AS "pointsCost"',
+        'r.activa AS active',
+        'r.orden AS "sortOrder"',
+        'r.version AS version',
+        'r.creada_en AS "createdAt"',
+        'r.actualizada_en AS "updatedAt"',
+        'p.nombre AS "productName"',
+        'p.precio_ctvs AS "productPriceCents"',
+        'p.controla_inventario AS "tracksInventory"',
+      ])
+      .innerJoin(Product, 'p', 'p.id_producto=r.id_producto')
+      .leftJoin(Category, 'c', 'c.id_categoria=p.id_categoria')
+      .where(
+        '(:p4 OR (r.activa AND p.activo AND p.visible_menu AND c.activa)) AND (:p1::text IS NULL OR r.nombre ILIKE :p1 OR p.nombre ILIKE :p1) AND (:p2::boolean IS NULL OR r.activa=:p2) AND (:p3::uuid IS NULL OR r.id_producto=:p3)',
+      )
+      .addOrderBy('r.orden', 'ASC')
+      .addOrderBy('r.nombre', 'ASC')
+      .addOrderBy('r.id_recompensa', 'ASC')
+      .limit(Number(queryValues2[4]))
+      .offset(Number(queryValues2[5]))
+      .setParameters(queryParameters2)
+      .getRawMany();
     return { items, total, page: q.page, limit: q.limit };
-  }
-  async cancel(id: string, client: ClientIdentity, key?: string) {
-    const actor = this.user({ userId: client.userId });
-    return this.idem.run(
-      actor,
-      `me/redemptions/${id.toLowerCase()}/cancel`,
-      key,
-      {},
-      200,
-      'solicitud_canje',
-      async (m) => {
-        await this.client(m, client);
-        const [own] = await this.persistence.cancelFindSolicitudCanje(m, {
-          id: id,
-          clientId: client.clientId,
-        });
-        if (!own) throw new NotFoundException('Canje no encontrado.');
-      },
-      async (m) => {
-        await lockTableOperations(m);
-        await this.persistence.requestFindCliente(m, {
-          clientId: client.clientId,
-        });
-        const [s] = await this.persistence.cancelFindSolicitudCanjeNext(m, {
-          id: id,
-          clientId: client.clientId,
-        });
-        if (!s) throw new NotFoundException('Canje no encontrado.');
-        if (s.estado !== 'pending')
-          throw new ConflictException('El canje ya fue resuelto.');
-        await this.release(m, id, 'cancelled');
-        await this.persistence.cancelUpdateSolicitudCanje(m, {
-          id: id,
-          userId: client.userId,
-        });
-        await this.history(m, id, client.userId, 'redemption.cancelled');
-        await auditTableOperation(
-          m,
-          actor,
-          'solicitud_canje',
-          id,
-          'redemption.cancelled',
-          {},
-        );
-        return {
-          resourceId: id,
-          response: await this.redemption(id, client.clientId, m),
-        };
-      },
-    );
-  }
-  async decide(
-    id: string,
-    action: 'approve' | 'reject',
-    actor: AuthenticatedRequestContext,
-    key: string | undefined,
-    reason?: string,
-  ) {
-    return this.idem.run(
-      this.user(actor),
-      `admin/redemptions/${id.toLowerCase()}/${action}`,
-      key,
-      { reason: reason ?? null },
-      200,
-      'solicitud_canje',
-      (m) => this.staff(m, actor, 'redemptions.manage').then(() => undefined),
-      async (m) => {
-        const zone = await lockTableOperations(m);
-        const [ref] = await this.persistence.decideFindSolicitudCanje(m, {
-          id: id,
-        });
-        if (!ref) throw new NotFoundException('Canje no encontrado.');
-        if (action === 'approve') await lockActiveVisit(m, ref.visit, zone);
-        else
-          await this.persistence.decideFindVisitaMesa(m, { visit: ref.visit });
-        if (action === 'approve') {
-          const [closed] = await this.persistence.decideFindSolicitudCanjeNext(
-            m,
-            { id: id },
-          );
-          if (closed)
-            throw new ConflictException(
-              'La caja de la jornada ya fue cerrada.',
-            );
-        }
-        await this.persistence.requestFindCliente(m, { clientId: ref.client });
-        await this.persistence.decideFindCuentaConsumo(m, {
-          account: ref.account,
-        });
-        const [s] = await this.persistence.decideFindSolicitudCanjeNextNext(m, {
-          id: id,
-        });
-        if (s.estado !== 'pending')
-          throw new ConflictException('El canje ya fue resuelto.');
-        if (action === 'reject') {
-          await this.release(m, id, 'rejected');
-          await this.persistence.decideUpdateSolicitudCanje(m, {
-            id: id,
-            reason: reason,
-            userId: actor.userId,
-          });
-          await this.history(m, id, actor.userId, 'redemption.rejected', {
-            reason,
-          });
-          await auditTableOperation(
-            m,
-            this.user(actor),
-            'solicitud_canje',
-            id,
-            'redemption.rejected',
-            { reason },
-          );
-          return {
-            resourceId: id,
-            response: await this.redemption(id, undefined, m, true),
-          };
-        }
-        const [valid] =
-          await this.persistence.decideFindSolicitudCanjeNextNextNext(m, {
-            id: id,
-          });
-        if (
-          !valid.fresh ||
-          valid.participant !== 'approved' ||
-          valid.account !== 'open' ||
-          valid.visit !== 'open' ||
-          !valid.table_active ||
-          valid.day_status !== 'open' ||
-          !valid.current_day ||
-          !valid.reward ||
-          !valid.product_active ||
-          !valid.visible_menu ||
-          !valid.category_active
-        )
-          throw new ConflictException(
-            'El canje o las condiciones operativas ya no están vigentes.',
-          );
-        const [bill] = await this.persistence.requestFindLiquidacion(m, {
-          account: s.id_cuenta,
-        });
-        if (bill)
-          throw new ConflictException(
-            'La cuenta tiene una liquidación pendiente.',
-          );
-        const [balance] = await this.persistence.decideFindMovimientoPuntos(m, {
-          id_cliente: s.id_cliente,
-          id: id,
-        });
-        if (
-          BigInt(balance.balance) - BigInt(balance.reserved) <
-          BigInt(s.costo_puntos)
-        )
-          throw new ConflictException(
-            'El saldo disponible ya no cubre este canje.',
-          );
-        const [inv] = await this.persistence.decideFindReservaInventarioCanje(
-          m,
-          { id: id },
-        );
-        if (valid.tracks && (!inv || inv.reservation_state !== 'active'))
-          throw new ConflictException(
-            'La reserva de existencias ya no está disponible.',
-          );
-        const [order] = await this.persistence.decideInsertPedido(m, {
-          id_jornada: s.id_jornada,
-          id_visita: s.id_visita,
-          id_cuenta: s.id_cuenta,
-          userId: actor.userId,
-          id: id,
-        });
-        const [version] = await this.persistence.decideInsertVersionPedido(m, {
-          id: order.id,
-        });
-        const [detail] = await this.persistence.decideInsertDetallePedido(m, {
-          id: version.id,
-          id_producto: s.id_producto,
-          tracks: valid.tracks,
-        });
-        await this.persistence.decideInsertAsignacionConsumo(m, {
-          id: detail.id,
-          id_cuenta: s.id_cuenta,
-        });
-        if (valid.tracks) {
-          await this.persistence.decideInsertReservaInventario(m, {
-            id: detail.id,
-            inventory: inv.inventory,
-          });
-          await this.persistence.decideUpdateReservaInventarioCanje(m, {
-            id: id,
-          });
-        }
-        await this.persistence.decideInsertMovimientoPuntos(m, {
-          id_cliente: s.id_cliente,
-          id: id,
-          costo_puntos: s.costo_puntos,
-        });
-        await this.ensurePointBalance(s.id_cliente, m);
-        await this.persistence.decideUpdateReservaPuntosCanje(m, { id: id });
-        await this.persistence.decideInsertHistorialPedido(m, {
-          id: order.id,
-          id2: version.id,
-          userId: actor.userId,
-        });
-        await this.persistence.decideUpdateSolicitudCanjeNext(m, {
-          id: id,
-          id2: order.id,
-          userId: actor.userId,
-        });
-        await this.history(m, id, actor.userId, 'redemption.approved', {
-          orderId: order.id,
-        });
-        await auditTableOperation(
-          m,
-          this.user(actor),
-          'solicitud_canje',
-          id,
-          'redemption.approved',
-          { orderId: order.id, points: Number(s.costo_puntos) },
-        );
-        return {
-          resourceId: id,
-          response: await this.redemption(id, undefined, m, true),
-        };
-      },
-    );
-  }
-  private async release(
-    m: EntityManager,
-    id: string,
-    status: 'rejected' | 'cancelled' | 'expired',
-  ) {
-    const [inv] = await this.persistence.releaseFindReservaInventarioCanje(m, {
-      id: id,
-    });
-    if (inv) {
-      await this.persistence.releaseUpdateInventarioDiario(m, {
-        inventory: inv.inventory,
-      });
-      await this.persistence.releaseUpdateReservaInventarioCanje(m, { id: id });
-    }
-    await this.persistence.releaseUpdateReservaPuntosCanje(m, { id: id });
-    await this.persistence.releaseUpdateSolicitudCanje(m, {
-      id: id,
-      status: status,
-    });
-  }
-  async releaseForParticipant(m: EntityManager, participantId: string) {
-    const rows = await this.persistence.releaseForParticipantFindSolicitudCanje(
-      m,
-      { participantId: participantId },
-    );
-    for (const r of rows) {
-      await this.release(m, r.id, 'cancelled');
-      await this.history(m, r.id, undefined, 'redemption.participant_left');
-      await auditTableOperation(
-        m,
-        {},
-        'solicitud_canje',
-        r.id,
-        'redemption.participant_left',
-        {},
-      );
-    }
-  }
-  async releaseForVisit(m: EntityManager, visitId: string) {
-    const rows = await this.persistence.releaseForVisitFindSolicitudCanje(m, {
-      visitId: visitId,
-    });
-    for (const r of rows) {
-      await this.release(m, r.id, 'cancelled');
-      await this.history(m, r.id, undefined, 'redemption.visit_closed');
-      await auditTableOperation(
-        m,
-        {},
-        'solicitud_canje',
-        r.id,
-        'redemption.visit_closed',
-        {},
-      );
-    }
-  }
-  async releaseForOperatingDay(
-    m: EntityManager,
-    dayId: string,
-    event:
-      | 'redemption.cash_closed'
-      | 'redemption.day_closed' = 'redemption.cash_closed',
-  ) {
-    const rows =
-      await this.persistence.releaseForOperatingDayFindSolicitudCanje(m, {
-        dayId: dayId,
-      });
-    for (const r of rows) {
-      await this.release(m, r.id, 'cancelled');
-      await this.history(m, r.id, undefined, event);
-      await auditTableOperation(m, {}, 'solicitud_canje', r.id, event, {
-        operatingDayId: dayId,
-      });
-    }
-  }
-  async refundForOrder(m: EntityManager, orderId: string, actor: Actor) {
-    const [r] = await this.persistence.refundForOrderFindSolicitudCanje(m, {
-      orderId: orderId,
-    });
-    if (!r || r.estado !== 'approved') return;
-    await this.persistence.requestFindCliente(m, { clientId: r.client });
-    const [inserted] =
-      await this.persistence.refundForOrderInsertMovimientoPuntos(m, {
-        client: r.client,
-        id: r.id,
-        points: r.points,
-      });
-    if (inserted) {
-      await this.history(m, r.id, actor.userId, 'redemption.points_returned', {
-        orderId,
-        points: Number(r.points),
-      });
-      await auditTableOperation(
-        m,
-        actor,
-        'solicitud_canje',
-        r.id,
-        'redemption.points_returned',
-        { orderId, points: Number(r.points) },
-      );
-      await this.ensurePointBalance(r.client, m);
-    }
-  }
-  private async ensurePointBalance(clientId: string, m: EntityManager) {
-    const [r] = await this.persistence.ensurePointBalanceFindMovimientoPuntos(
-      m,
-      { clientId: clientId },
-    );
-    if (!Number.isSafeInteger(Number(r.balance)))
-      throw new ConflictException('Saldo de puntos excede el rango seguro.');
-  }
-  async expirePending() {
-    if (this.expiryRunning || !this.db.isInitialized) return;
-    this.expiryRunning = true;
-    try {
-      const attempted: string[] = [];
-      while (true) {
-        const ids: Array<{ id: string }> =
-          await this.persistence.expirePendingFindSolicitudCanje(
-            this.db.manager,
-            { attempted: attempted },
-          );
-        if (!ids.length) break;
-        for (const row of ids) {
-          attempted.push(row.id);
-          try {
-            await this.db.transaction(async (m) => {
-              await lockTableOperations(m);
-              const [s] =
-                await this.persistence.expirePendingFindSolicitudCanjeNext(m, {
-                  id: row.id,
-                });
-              if (!s) return;
-              await this.release(m, row.id, 'expired');
-              await this.history(m, row.id, undefined, 'redemption.expired');
-              await auditTableOperation(
-                m,
-                {},
-                'solicitud_canje',
-                row.id,
-                'redemption.expired',
-                {},
-              );
-            });
-          } catch (error) {
-            this.logger.error(
-              `No se pudo vencer un canje pendiente.`,
-              error instanceof Error ? error.stack : undefined,
-            );
-          }
-        }
-      }
-    } finally {
-      this.expiryRunning = false;
-    }
   }
 }

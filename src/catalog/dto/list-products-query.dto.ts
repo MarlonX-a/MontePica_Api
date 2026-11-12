@@ -1,6 +1,6 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
-import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ListProductsQueryDto {
   @ApiPropertyOptional({ format: 'uuid', description: 'Filtra por categoría.' })

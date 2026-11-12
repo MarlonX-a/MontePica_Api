@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import 'reflect-metadata';
-import type { EntityManager } from 'typeorm';
-import { CatalogSeedRepository } from '../catalog/repositories/catalog-seed.repository.js';
-import dataSource from './data-source.js';
+import { DataSource, type EntityManager } from 'typeorm';
+import { CatalogSeedService } from '../catalog/catalog-seed.service.js';
+import { createCommandContext } from './command-context.js';
+
+let context: import('@nestjs/common').INestApplicationContext | undefined;
 
 const categories = [
   { name: 'Ceviches', normalizedName: 'ceviches', sortOrder: 0 },
@@ -60,17 +62,22 @@ const products = [
   },
 ];
 
-async function seedCatalog(manager: EntityManager): Promise<void> {
-  const repository = new CatalogSeedRepository();
+async function seedCatalog(
+  manager: EntityManager,
+  service: CatalogSeedService,
+): Promise<void> {
   for (const category of categories)
-    await repository.insertCategoryIfMissing(manager, category);
+    await service.insertCategoryIfMissing(manager, category);
   for (const product of products)
-    await repository.insertProductIfMissing(manager, product);
+    await service.insertProductIfMissing(manager, product);
 }
 
 try {
-  await dataSource.initialize();
-  await dataSource.transaction(seedCatalog);
+  context = await createCommandContext('seed');
+  const dataSource = context.get(DataSource);
+  await dataSource.transaction((manager) =>
+    seedCatalog(manager, context!.get(CatalogSeedService)),
+  );
   console.info(
     'Catálogo de ejemplo cargado. Los registros existentes se conservaron.',
   );
@@ -78,5 +85,5 @@ try {
   console.error('No se pudo cargar el catálogo de ejemplo.', error);
   process.exitCode = 1;
 } finally {
-  if (dataSource.isInitialized) await dataSource.destroy();
+  await context?.close();
 }

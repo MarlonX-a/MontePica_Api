@@ -2,63 +2,57 @@ import {
   Body,
   Controller,
   Get,
-  Patch,
-  Post,
-  Param,
-  ParseUUIDPipe,
-  UseGuards,
-  Query,
   Headers,
   HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
-  ApiOperation,
+  ApiHeader,
   ApiOkResponse,
+  ApiOperation,
   ApiResponse,
   ApiTags,
-  ApiHeader,
 } from '@nestjs/swagger';
 import { AuthAccessGuard } from '../auth/auth-access.guard.js';
+import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { CurrentUserContext } from '../auth/current-user.decorator.js';
-import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
-import { PermissionsGuard } from '../auth/permissions.guard.js';
 import { RequirePermission } from '../auth/permissions.decorator.js';
-import { OpenCashRegisterDto } from './dto/open-cash-register.dto.js';
+import { PermissionsGuard } from '../auth/permissions.guard.js';
+import { CloseOperatingDayDto } from './dto/close-operating-day.dto.js';
+import { OpenWithPendingDayResponseDto } from './dto/open-with-pending-day-response.dto.js';
+import { OpenWithPendingDaysDto } from './dto/open-with-pending-days.dto.js';
+import { OperatingDayClosingPreviewDto } from './dto/operating-day-closing-preview.dto.js';
+import { OperatingDayClosureDto } from './dto/operating-day-closure.dto.js';
+import { OperatingDayDetailsDto } from './dto/operating-day-details.dto.js';
+import { OperatingDayPreviewQueryDto } from './dto/operating-day-preview-query.dto.js';
 import { UpdateOperationsSettingsDto } from './dto/update-operations-settings.dto.js';
-import { OperationsService } from './operations.service.js';
-import { CashSummaryDto } from '../tables/cancellations.dto.js';
-import {
-  CashClosureResponseDto,
-  CashClosingPreviewDto,
-  CashClosingPreviewQueryDto,
-  CashRegisterPageDto,
-  CloseCashRegisterDto,
-  ListCashRegistersDto,
-} from './dto/cash-register.dto.js';
-import {
-  CloseOperatingDayDto,
-  OperatingDayClosureDto,
-  OperatingDayClosingPreviewDto,
-  OperatingDayDetailsDto,
-  OperatingDayPreviewQueryDto,
-  OpenWithPendingDayResponseDto,
-  OpenWithPendingDaysDto,
-} from './dto/operating-day.dto.js';
+import { OperatingDayClosureService } from './operating-day-closure.service.js';
+import { OperatingDaysService } from './operating-days.service.js';
+import { OperationsSettingsService } from './operations-settings.service.js';
 
 @ApiTags('Operación diaria')
 @ApiBearerAuth('access-token')
 @UseGuards(AuthAccessGuard, PermissionsGuard)
 @Controller('admin/operations')
 export class OperationsController {
-  constructor(private readonly operations: OperationsService) {}
+  constructor(
+    private readonly settings: OperationsSettingsService,
+    private readonly days: OperatingDaysService,
+    private readonly closures: OperatingDayClosureService,
+  ) {}
 
   @Get('settings')
   @RequirePermission('operations.read')
   @ApiOperation({ summary: 'Consulta la configuración de operación.' })
   getSettings() {
-    return this.operations.getSettings();
+    return this.settings.getSettings();
   }
 
   @Patch('settings')
@@ -70,7 +64,7 @@ export class OperationsController {
     @Body() dto: UpdateOperationsSettingsDto,
     @CurrentUserContext() actor: AuthenticatedRequestContext,
   ) {
-    return this.operations.updateSettings(dto, actor);
+    return this.settings.updateSettings(dto, actor);
   }
 
   @Get('current')
@@ -79,73 +73,7 @@ export class OperationsController {
     summary: 'Consulta la jornada y caja de la fecha operativa actual.',
   })
   getCurrent() {
-    return this.operations.getCurrent();
-  }
-
-  @Get('cash')
-  @RequirePermission('operations.read')
-  @ApiOperation({ summary: 'Lista cajas actuales e históricas.' })
-  @ApiOkResponse({ type: CashRegisterPageDto })
-  listCashRegisters(@Query() query: ListCashRegistersDto) {
-    return this.operations.listCashRegisters(query);
-  }
-
-  @Get('cash/:id/summary')
-  @RequirePermission('operations.read')
-  @ApiOperation({
-    summary:
-      'Calcula el saldo de caja desde apertura, cobros en efectivo y devoluciones.',
-  })
-  @ApiOkResponse({ type: CashSummaryDto })
-  getCashSummary(@Param('id', ParseUUIDPipe) id: string) {
-    return this.operations.getCashSummary(id);
-  }
-
-  @Get('cash/:id/closing-preview')
-  @RequirePermission('operations.read')
-  @ApiOperation({
-    summary: 'Muestra el saldo esperado y los bloqueos antes del cierre.',
-  })
-  @ApiOkResponse({ type: CashClosingPreviewDto })
-  closingPreview(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Query() query: CashClosingPreviewQueryDto,
-  ) {
-    return this.operations.getCashClosingPreview(id, query);
-  }
-
-  @Post('cash/:id/close')
-  @HttpCode(200)
-  @RequirePermission('operations.closeCash')
-  @ApiHeader({ name: 'Idempotency-Key', required: true })
-  @ApiOperation({
-    summary: 'Registra el conteo y cierra la caja de forma inmutable.',
-  })
-  @ApiOkResponse({
-    type: CashClosureResponseDto,
-    description: 'Conciliación registrada.',
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'La caja tiene pendientes o ya fue cerrada.',
-  })
-  closeCash(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CloseCashRegisterDto,
-    @CurrentUserContext() actor: AuthenticatedRequestContext,
-    @Headers('idempotency-key') key?: string,
-  ) {
-    return this.operations.closeCash(id, dto, actor, key);
-  }
-
-  @Get('cash/:id/closure')
-  @RequirePermission('operations.read')
-  @ApiOperation({
-    summary: 'Consulta la conciliación inmutable de una caja cerrada.',
-  })
-  @ApiOkResponse({ type: CashClosureResponseDto })
-  getCashClosure(@Param('id', ParseUUIDPipe) id: string) {
-    return this.operations.getCashClosure(id);
+    return this.days.getCurrent();
   }
 
   @Post('days/open')
@@ -159,7 +87,7 @@ export class OperationsController {
     description: 'Ya existe una jornada para esa fecha.',
   })
   openDay(@CurrentUserContext() actor: AuthenticatedRequestContext) {
-    return this.operations.openDay(actor);
+    return this.days.openDay(actor);
   }
 
   @Get('days/:id')
@@ -170,7 +98,7 @@ export class OperationsController {
   @ApiOkResponse({ type: OperatingDayDetailsDto })
   @ApiResponse({ status: 404, description: 'Jornada no encontrada.' })
   getOperatingDay(@Param('id', ParseUUIDPipe) id: string) {
-    return this.operations.getOperatingDay(id);
+    return this.days.getOperatingDay(id);
   }
 
   @Get('days/:id/closing-preview')
@@ -183,7 +111,7 @@ export class OperationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: OperatingDayPreviewQueryDto,
   ) {
-    return this.operations.getOperatingDayClosingPreview(id, query);
+    return this.closures.getOperatingDayClosingPreview(id, query);
   }
 
   @Post('days/:id/close')
@@ -205,7 +133,7 @@ export class OperationsController {
     @CurrentUserContext() actor: AuthenticatedRequestContext,
     @Headers('idempotency-key') key?: string,
   ) {
-    return this.operations.closeOperatingDay(id, dto, actor, key);
+    return this.closures.closeOperatingDay(id, dto, actor, key);
   }
 
   @Get('days/:id/closure')
@@ -219,7 +147,7 @@ export class OperationsController {
     description: 'La jornada todavía no tiene cierre.',
   })
   getOperatingDayClosure(@Param('id', ParseUUIDPipe) id: string) {
-    return this.operations.getOperatingDayClosure(id);
+    return this.closures.getOperatingDayClosure(id);
   }
 
   @Post('days/open-with-pending-days')
@@ -242,24 +170,6 @@ export class OperationsController {
     @CurrentUserContext() actor: AuthenticatedRequestContext,
     @Headers('idempotency-key') key?: string,
   ) {
-    return this.operations.openWithPendingDays(dto, actor, key);
-  }
-
-  @Post('cash/open')
-  @RequirePermission('operations.open')
-  @ApiOperation({
-    summary:
-      'Abre la caja de la jornada actual con un fondo inicial en centavos.',
-  })
-  @ApiResponse({ status: 201, description: 'Caja abierta.' })
-  @ApiResponse({
-    status: 409,
-    description: 'La jornada no está abierta o ya tiene una caja.',
-  })
-  openCash(
-    @Body() dto: OpenCashRegisterDto,
-    @CurrentUserContext() actor: AuthenticatedRequestContext,
-  ) {
-    return this.operations.openCash(dto, actor);
+    return this.days.openWithPendingDays(dto, actor, key);
   }
 }

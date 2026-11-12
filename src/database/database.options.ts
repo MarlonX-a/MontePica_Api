@@ -1,14 +1,8 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions.js';
+import { type PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions.js';
 import { validateDatabaseEnvironment } from '../config/environment.validation.js';
-import { Category } from '../catalog/entities/category.entity.js';
-import { Product } from '../catalog/entities/product.entity.js';
-import { Client } from '../auth/entities/client.entity.js';
-import { Profile } from '../auth/entities/profile.entity.js';
-import { Role } from '../auth/entities/role.entity.js';
-import { User } from '../auth/entities/user.entity.js';
-import { UserSession } from '../auth/entities/user-session.entity.js';
+import { databaseEntities } from './entities.js';
 import { ParameterlessQueryLogger } from './parameterless-query.logger.js';
 
 const databaseDirectory = dirname(fileURLToPath(import.meta.url));
@@ -25,8 +19,10 @@ export function createDatabaseOptions(
     username: env.DB_USERNAME,
     password: env.DB_PASSWORD,
     database: env.DB_NAME,
-    entities: [Category, Product, Client, Profile, Role, User, UserSession],
-    migrations: [join(databaseDirectory, 'migrations/*{.ts,.js}').replaceAll('\\', '/')],
+    entities: databaseEntities,
+    migrations: [
+      join(databaseDirectory, 'migrations/*{.ts,.js}').replaceAll('\\', '/'),
+    ],
     synchronize: false,
     migrationsRun: false,
     logging: env.DB_LOGGING,

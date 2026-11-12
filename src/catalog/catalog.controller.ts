@@ -8,12 +8,10 @@ import {
 } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { CatalogService } from './catalog.service.js';
-import { ListProductsQueryDto } from './dto/list-products-query.dto.js';
 import { CategoryResponseDto } from './dto/category-response.dto.js';
-import {
-  PaginatedProductsResponseDto,
-  ProductResponseDto,
-} from './dto/product-response.dto.js';
+import { ListProductsQueryDto } from './dto/list-products-query.dto.js';
+import { PaginatedProductsResponseDto } from './dto/paginated-products-response.dto.js';
+import { ProductResponseDto } from './dto/product-response.dto.js';
 
 @ApiTags('Catálogo')
 @SkipThrottle()
@@ -33,7 +31,13 @@ export class CatalogController {
   @ApiQuery({ name: 'categoryId', required: false, format: 'uuid' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, minimum: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, minimum: 1, maximum: 100 })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    minimum: 1,
+    maximum: 100,
+  })
   @ApiOkResponse({ type: PaginatedProductsResponseDto })
   listProducts(@Query() query: ListProductsQueryDto) {
     return this.catalog.listProducts(query);

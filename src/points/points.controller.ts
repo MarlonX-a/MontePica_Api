@@ -1,4 +1,3 @@
-import { PointsBalanceDto,PointsSettingsResponseDto,PointsMovementPageDto } from './points-response.dto.js';
 import {
   Body,
   Controller,
@@ -8,62 +7,33 @@ import {
   ParseUUIDPipe,
   Put,
   Query,
-  UseGuards,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiHeader,
-  ApiTags,
-  ApiProperty,
-  ApiPropertyOptional,
   ApiOkResponse,
   ApiResponse,
+  ApiTags,
 } from '@nestjs/swagger';
-import { IsBoolean, IsInt, Max, Min, ValidateIf } from 'class-validator';
-import { Type } from 'class-transformer';
 import { AuthAccessGuard } from '../auth/auth-access.guard.js';
+import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { CurrentUserContext } from '../auth/current-user.decorator.js';
-import type { AuthenticatedRequestContext } from '../auth/auth.types.js';
-import { PermissionsGuard } from '../auth/permissions.guard.js';
 import { RequirePermission } from '../auth/permissions.decorator.js';
+import { PermissionsGuard } from '../auth/permissions.guard.js';
 import {
   ClientAccessGuard,
-  CurrentClient,
   type ClientIdentity,
-} from '../tables/client-access.guard.js';
+  CurrentClient,
+} from '../common/identity/client-access.guard.js';
+import { PointsBalanceDto } from './dto/points-balance.dto.js';
+import { PointsConfigDto } from './dto/points-config.dto.js';
+import { PointsMovementPageDto } from './dto/points-movement-page.dto.js';
+import { PointsQueryDto } from './dto/points-query.dto.js';
+import { PointsSettingsResponseDto } from './dto/points-settings-response.dto.js';
 import { PointsService } from './points.service.js';
-import { IsIn, IsUUID } from 'class-validator';
-class PointsConfigDto {
-  @ApiProperty() @IsBoolean() enabled: boolean;
-  @ApiProperty({ minimum: 1, maximum: 1000 })
-  @IsInt()
-  @Min(1)
-  @Max(1000)
-  pointsPerDollar: number;
-}
-class PointsQueryDto {
-  @ApiPropertyOptional({ default: 1 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(2147483647)
-  page = 1;
-  @ApiPropertyOptional({ default: 20, maximum: 100 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit = 20;
-  @ValidateIf((_o, v) => v !== undefined)
-  @ApiPropertyOptional({ enum: ['earn', 'refundAdjustment', 'redeem', 'redemptionReturn'] })
-  @IsIn(['earn', 'refundAdjustment', 'redeem', 'redemptionReturn'])
-  type?: string;
-  @ValidateIf((_o, v) => v !== undefined)
-  @ApiPropertyOptional({ format: 'uuid' })
-  @IsUUID()
-  paymentId?: string;
-}
+
 @ApiTags('Puntos')
 @ApiResponse({ status: 400, description: 'Datos inválidos.' })
 @ApiResponse({ status: 401, description: 'Sesión registrada requerida.' })
@@ -79,6 +49,7 @@ class PointsQueryDto {
 @Controller()
 export class PointsController {
   constructor(private readonly points: PointsService) {}
+
   @ApiOkResponse({
     schema: {
       type: 'object',
@@ -90,12 +61,13 @@ export class PointsController {
       },
     },
   })
-  @ApiOkResponse({type:PointsSettingsResponseDto})
+  @ApiOkResponse({ type: PointsSettingsResponseDto })
   @Get('points/settings')
   settings() {
     return this.points.publicSettings();
   }
-  @ApiOkResponse({type:PointsSettingsResponseDto})
+
+  @ApiOkResponse({ type: PointsSettingsResponseDto })
   @Put('admin/points/settings')
   @UseGuards(AuthAccessGuard, PermissionsGuard)
   @RequirePermission('points.configure')
@@ -108,7 +80,8 @@ export class PointsController {
   ) {
     return this.points.configure(d.enabled, d.pointsPerDollar, a, k);
   }
-  @ApiOkResponse({type:PointsSettingsResponseDto})
+
+  @ApiOkResponse({ type: PointsSettingsResponseDto })
   @Get('admin/points/settings')
   @UseGuards(AuthAccessGuard, PermissionsGuard)
   @RequirePermission('points.read')
@@ -116,6 +89,7 @@ export class PointsController {
   adminSettings() {
     return this.points.current();
   }
+
   @ApiOkResponse({
     schema: {
       type: 'object',
@@ -125,7 +99,7 @@ export class PointsController {
       },
     },
   })
-  @ApiOkResponse({type:PointsBalanceDto})
+  @ApiOkResponse({ type: PointsBalanceDto })
   @Get('me/points')
   @UseGuards(ClientAccessGuard)
   @ApiBearerAuth('client-token')
@@ -134,7 +108,8 @@ export class PointsController {
       throw new UnauthorizedException('Se requiere una cuenta registrada.');
     return this.points.balance(c.clientId);
   }
-  @ApiOkResponse({type:PointsMovementPageDto})
+
+  @ApiOkResponse({ type: PointsMovementPageDto })
   @Get('me/points/movements')
   @UseGuards(ClientAccessGuard)
   @ApiBearerAuth('client-token')
@@ -143,7 +118,8 @@ export class PointsController {
       throw new UnauthorizedException('Se requiere una cuenta registrada.');
     return this.points.movements(c.clientId, q);
   }
-  @ApiOkResponse({type:PointsBalanceDto})
+
+  @ApiOkResponse({ type: PointsBalanceDto })
   @Get('admin/clients/:id/points')
   @UseGuards(AuthAccessGuard, PermissionsGuard)
   @RequirePermission('points.read')
@@ -151,7 +127,8 @@ export class PointsController {
   client(@Param('id', ParseUUIDPipe) id: string) {
     return this.points.balance(id);
   }
-  @ApiOkResponse({type:PointsMovementPageDto})
+
+  @ApiOkResponse({ type: PointsMovementPageDto })
   @Get('admin/clients/:id/points/movements')
   @UseGuards(AuthAccessGuard, PermissionsGuard)
   @RequirePermission('points.read')
