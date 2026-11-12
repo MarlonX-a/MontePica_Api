@@ -597,7 +597,11 @@ export class OperationsService {
           );
 
         const before = await this.operatingDays.cleanupCounts(manager, id);
-        await this.rewards.releaseForOperatingDay(manager, id);
+        await this.rewards.releaseForOperatingDay(
+          manager,
+          id,
+          'redemption.day_closed',
+        );
         const visitCleanup = await this.participants.closeForOperatingDay(
           manager,
           id,

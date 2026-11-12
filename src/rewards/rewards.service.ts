@@ -696,22 +696,23 @@ export class RewardsService {
       );
     }
   }
-  async releaseForOperatingDay(m: EntityManager, dayId: string) {
+  async releaseForOperatingDay(
+    m: EntityManager,
+    dayId: string,
+    event:
+      | 'redemption.cash_closed'
+      | 'redemption.day_closed' = 'redemption.cash_closed',
+  ) {
     const rows =
       await this.persistence.releaseForOperatingDayFindSolicitudCanje(m, {
         dayId: dayId,
       });
     for (const r of rows) {
       await this.release(m, r.id, 'cancelled');
-      await this.history(m, r.id, undefined, 'redemption.cash_closed');
-      await auditTableOperation(
-        m,
-        {},
-        'solicitud_canje',
-        r.id,
-        'redemption.cash_closed',
-        { operatingDayId: dayId },
-      );
+      await this.history(m, r.id, undefined, event);
+      await auditTableOperation(m, {}, 'solicitud_canje', r.id, event, {
+        operatingDayId: dayId,
+      });
     }
   }
   async refundForOrder(m: EntityManager, orderId: string, actor: Actor) {

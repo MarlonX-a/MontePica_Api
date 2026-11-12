@@ -4194,6 +4194,34 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         [approvedClient, day.id, config.id, users.admin],
       );
 
+      const [reward] = await db.query(
+        `SELECT id_recompensa id,id_producto product FROM recompensa ORDER BY id_recompensa LIMIT 1`,
+      );
+      const [inventory] = await db.query(
+        `INSERT INTO inventario_diario(id_jornada,id_producto,cantidad_inicial,cantidad_fisica,cantidad_reservada,inicializado_por) VALUES($1,$2,2,2,1,$3) RETURNING id_inventario id`,
+        [day.id, reward.product, users.admin],
+      );
+      const [redemption] = await db.query(
+        `INSERT INTO solicitud_canje(id_cliente,id_participante,id_cuenta,id_visita,id_jornada,id_recompensa,version_recompensa,id_producto,controla_stock,costo_puntos,expira_en,creado_por) VALUES($1,$2,$3,$4,$5,$6,1,$7,true,10,now()+interval '15 minutes',$8) RETURNING id_canje id`,
+        [
+          approvedClient,
+          participant.id,
+          account.id,
+          visit.id,
+          day.id,
+          reward.id,
+          reward.product,
+          users.admin,
+        ],
+      );
+      await db.query(
+        `INSERT INTO reserva_puntos_canje(id_canje,id_cliente,puntos) VALUES($1,$2,10)`,
+        [redemption.id, approvedClient],
+      );
+      await db.query(
+        `INSERT INTO reserva_inventario_canje(id_canje,id_inventario) VALUES($1,$2)`,
+        [redemption.id, inventory.id],
+      );
       await request(http())
         .get(`/api/v1/admin/operations/days/${day.id}/closing-preview`)
         .set('Authorization', auth(tokens.worker))
@@ -4201,6 +4229,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .then((r) => {
           expect(r.body.canClose).toBe(true);
           expect(r.body.cleanupActions).toMatchObject({
+            pendingRedemptions: 1,
             pendingParticipants: 1,
             approvedParticipants: 1,
             openVisits: 1,
@@ -4223,6 +4252,26 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         operatingDayId: day.id,
         notes: 'Cierre verificado',
       });
+      const [released] = await db.query(
+        `SELECT s.estado,p.estado AS points_state,r.estado AS stock_state,i.cantidad_reservada,i.cantidad_fisica
+         FROM solicitud_canje s JOIN reserva_puntos_canje p ON p.id_canje=s.id_canje
+         JOIN reserva_inventario_canje r ON r.id_canje=s.id_canje JOIN inventario_diario i ON i.id_inventario=r.id_inventario WHERE s.id_canje=$1`,
+        [redemption.id],
+      );
+      expect(released).toMatchObject({
+        estado: 'cancelled',
+        points_state: 'released',
+        stock_state: 'released',
+        cantidad_reservada: 0,
+        cantidad_fisica: 2,
+      });
+      const history = await db.query(
+        `SELECT evento FROM historial_canje WHERE id_canje=$1`,
+        [redemption.id],
+      );
+      expect(history.map((row: { evento: string }) => row.evento)).toEqual([
+        'redemption.day_closed',
+      ]);
       const replays = await Promise.all([
         request(http())
           .post(`/api/v1/admin/operations/days/${day.id}/close`)

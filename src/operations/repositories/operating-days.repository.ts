@@ -320,7 +320,7 @@ export class OperatingDaysRepository {
       UNION ALL SELECT 'pendingSettlements',l.id_liquidacion::text,'La cuenta tiene una liquidación pendiente.' FROM liquidacion l JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta WHERE c.id_jornada=$1 AND l.estado='pending'
       UNION ALL SELECT 'pendingTransfers',p.id_pago::text,'La transferencia espera verificación.' FROM pago p JOIN liquidacion l ON l.id_liquidacion=p.id_liquidacion JOIN cuenta_consumo c ON c.id_cuenta=l.id_cuenta WHERE c.id_jornada=$1 AND p.estado='pendingVerification'
       UNION ALL SELECT 'pendingCancellations',s.id_solicitud::text,'La solicitud de cancelación espera decisión.' FROM solicitud_cancelacion s JOIN pedido o ON o.id_pedido=s.id_pedido WHERE o.id_jornada=$1 AND s.estado='pending'
-      UNION ALL SELECT 'activeOrderReservations',o.id_pedido::text,'El pedido conserva reservas de inventario activas.' FROM pedido o JOIN version_pedido v ON v.id_pedido=o.id_pedido JOIN detalle_pedido d ON d.id_version=v.id_version JOIN reserva_inventario r ON r.id_detalle=d.id_detalle AND r.estado='active' WHERE o.id_jornada=$1
+      UNION ALL SELECT DISTINCT 'activeOrderReservations',o.id_pedido::text,'El pedido conserva reservas de inventario activas.' FROM pedido o JOIN version_pedido v ON v.id_pedido=o.id_pedido JOIN detalle_pedido d ON d.id_version=v.id_version JOIN reserva_inventario r ON r.id_detalle=d.id_detalle AND r.estado='active' WHERE o.id_jornada=$1
     )`;
   }
 }
