@@ -263,7 +263,6 @@ export class SettlementsService {
       manager,
       input.userId,
       input.sessionId,
-      undefined,
     );
     return row ? [row] : [];
   }

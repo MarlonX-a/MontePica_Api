@@ -51,6 +51,9 @@ function integerValue(
   min: number,
   max: number,
 ): number {
+  if (value !== undefined && typeof value !== 'string' && typeof value !== 'number') {
+    throw new TypeError(`La variable ${name} debe ser un número entero.`);
+  }
   const raw =
     value === undefined || value === '' ? String(defaultValue) : String(value);
   if (!/^\d+$/.test(raw)) {
@@ -78,7 +81,7 @@ function booleanValue(
 function originsValue(value: unknown): string[] {
   if (value === undefined || value === '') return [];
   if (typeof value !== 'string') {
-    throw new Error(
+    throw new TypeError(
       'La variable CORS_ORIGINS debe ser una lista separada por comas.',
     );
   }

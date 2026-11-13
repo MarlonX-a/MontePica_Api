@@ -251,7 +251,6 @@ export class PaymentsService {
       manager,
       input.userId,
       input.sessionId,
-      undefined,
     );
     return row ? [row] : [];
   }

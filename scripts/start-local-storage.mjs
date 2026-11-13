@@ -22,12 +22,12 @@ writeFileSync(
   }),
   { mode: 0o600 },
 );
-const dockerCandidates =
-  process.platform === 'win32'
-    ? ['C:/Program Files/Docker/Docker/resources/bin/docker.exe']
-    : process.platform === 'darwin'
-      ? ['/opt/homebrew/bin/docker', '/usr/local/bin/docker']
-      : ['/usr/local/bin/docker', '/usr/bin/docker'];
+let dockerCandidates = ['/usr/local/bin/docker', '/usr/bin/docker'];
+if (process.platform === 'win32') {
+  dockerCandidates = ['C:/Program Files/Docker/Docker/resources/bin/docker.exe'];
+} else if (process.platform === 'darwin') {
+  dockerCandidates = ['/opt/homebrew/bin/docker', '/usr/local/bin/docker'];
+}
 const docker = dockerCandidates.find((candidate) => existsSync(candidate));
 if (!docker) {
   throw new Error(
