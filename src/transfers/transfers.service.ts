@@ -1,10 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -41,8 +39,6 @@ import {
   DecideFindParticipanteRow,
   DecideFindPedidoRow,
   ReceiptFindComprobanteRow,
-  StaffFindUsuarioNextRow,
-  StaffFindUsuarioRow,
   UploadFindCajaRow,
   UploadFindComprobanteRow,
   UploadFindCuentaConsumoRow,
@@ -79,20 +75,9 @@ export class TransfersService {
     actor: AuthenticatedRequestContext,
     permission: string,
   ) {
-    const [s] = await this.staffFindUsuario(m, {
-      userId: actor.userId,
-      sessionId: actor.sessionId,
+    await this.authorization.requirePermission(m, actor, permission, {
+      permissionMessage: 'No tienes permiso para realizar esta acción.',
     });
-    if (!s || !s.activo || s.revocada_en || !s.valid)
-      throw new UnauthorizedException('Sesión no válida.');
-    const [p] = await this.staffFindUsuarioNext(m, {
-      userId: actor.userId,
-      permission,
-    });
-    if (!p)
-      throw new ForbiddenException(
-        'No tienes permiso para realizar esta acción.',
-      );
   }
 
   private validate(file: ReceiptFile) {
@@ -407,32 +392,6 @@ export class TransfersService {
     });
     if (!row) throw new NotFoundException('Comprobante no encontrado.');
     return { mime: row.mime, body: await this.storage.get(row.key) };
-  }
-
-  private async staffFindUsuario(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<StaffFindUsuarioRow[]> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-      undefined,
-    );
-    return row ? [row] : [];
-  }
-
-  private async staffFindUsuarioNext(
-    manager: EntityManager,
-    input: { userId: string; permission: string },
-  ): Promise<StaffFindUsuarioNextRow[]> {
-    return (await this.authorization.hasPermission(
-      manager,
-      input.userId,
-      input.permission,
-    ))
-      ? [{ '1': '1' }]
-      : [];
   }
 
   private uploadFindLiquidacion(

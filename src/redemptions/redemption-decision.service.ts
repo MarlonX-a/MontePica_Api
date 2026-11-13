@@ -1,6 +1,5 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -39,7 +38,6 @@ import {
   DecideInsertPedidoRow,
   DecideInsertVersionPedidoRow,
   RequestFindLiquidacionRow,
-  StaffFindRolPermisoRow,
 } from '../rewards/types/rewards.types.js';
 import { Settlement } from '../settlements/entities/settlement.entity.js';
 import { RestaurantTable } from '../tables/entities/restaurant-table.entity.js';
@@ -68,15 +66,13 @@ export class RedemptionDecisionService {
     actor: AuthenticatedRequestContext,
     permission: string,
   ) {
-    const [s] = await this.staffFindRolPermiso(m, {
-      userId: actor.userId,
-      sessionId: actor.sessionId,
+    const session = await this.authorization.requirePermission(
+      m,
+      actor,
       permission,
-    });
-    if (!s || !s.activo || s.revocada_en || !s.valid)
-      throw new UnauthorizedException('Sesión inválida.');
-    if (!s.allowed) throw new ForbiddenException('Permiso insuficiente.');
-    return s.role as string;
+      { unauthorizedMessage: 'Sesión inválida.' },
+    );
+    return session.role as string;
   }
 
   private user(actor: Actor) {
@@ -99,7 +95,9 @@ export class RedemptionDecisionService {
       { reason: reason ?? null },
       200,
       'solicitud_canje',
-      (m) => this.staff(m, actor, 'redemptions.manage').then(() => undefined),
+      async (m) => {
+        await this.staff(m, actor, 'redemptions.manage');
+      },
       async (m) => {
         const zone = await this.operationalContext.lockTableOperations(m);
         const [ref] = await this.decideFindSolicitudCanje(m, {
@@ -268,19 +266,6 @@ export class RedemptionDecisionService {
         };
       },
     );
-  }
-
-  private async staffFindRolPermiso(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string; permission: string },
-  ): Promise<StaffFindRolPermisoRow[]> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-      input.permission,
-    );
-    return row ? [row] : [];
   }
 
   private requestFindLiquidacion(

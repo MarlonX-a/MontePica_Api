@@ -1,9 +1,7 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
@@ -48,8 +46,6 @@ import {
   DecideInsertDevolucionRow,
   DetailFindHistorialCancelacionRow,
   DetailFindSolicitudCancelacionRow,
-  StaffFindUsuarioNextRow,
-  StaffFindUsuarioRow,
 } from './types/cancellations.types.js';
 
 @Injectable()
@@ -72,21 +68,12 @@ export class CancellationsService {
     permission: string,
     admin = false,
   ) {
-    const [s] = await this.staffFindUsuario(m, {
-      userId: a.userId,
-      sessionId: a.sessionId,
+    await this.authorization.requirePermission(m, a, permission, {
+      adminOnly: admin,
+      unauthorizedMessage: 'Sesion invalida.',
+      adminMessage: 'Solo el administrador puede decidir cancelaciones.',
+      permissionMessage: 'Permiso insuficiente.',
     });
-    if (!s || !s.activo || s.revocada_en || !s.valid)
-      throw new UnauthorizedException('Sesion invalida.');
-    if (admin && s.role !== 'admin')
-      throw new ForbiddenException(
-        'Solo el administrador puede decidir cancelaciones.',
-      );
-    const [p] = await this.staffFindUsuarioNext(m, {
-      userId: a.userId,
-      permission,
-    });
-    if (!p) throw new ForbiddenException('Permiso insuficiente.');
   }
 
   async create(
@@ -381,32 +368,6 @@ export class CancellationsService {
         };
       },
     );
-  }
-
-  private async staffFindUsuario(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<StaffFindUsuarioRow[]> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-      undefined,
-    );
-    return row ? [row] : [];
-  }
-
-  private async staffFindUsuarioNext(
-    manager: EntityManager,
-    input: { userId: string; permission: string },
-  ): Promise<StaffFindUsuarioNextRow[]> {
-    return (await this.authorization.hasPermission(
-      manager,
-      input.userId,
-      input.permission,
-    ))
-      ? [{ '1': '1' }]
-      : [];
   }
 
   private createFindPedido(

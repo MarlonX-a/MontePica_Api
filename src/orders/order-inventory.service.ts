@@ -1,11 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
+import { Category } from '../catalog/entities/category.entity.js';
+import { Product } from '../catalog/entities/product.entity.js';
 import { DailyInventory } from '../inventory/entities/daily-inventory.entity.js';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity.js';
 import { InventoryReservation } from './entities/inventory-reservation.entity.js';
 import { OrderItem } from './entities/order-item.entity.js';
 import {
   CreateFindInventarioDiarioRow,
+  EditFindProductoRow,
   EditFindInventarioDiarioRow,
   EditFindReservaInventarioRow,
   TransitionFindReservaInventarioRow,
@@ -13,6 +16,28 @@ import {
 
 @Injectable()
 export class OrderInventoryService {
+  lockAvailableProducts(
+    manager: EntityManager,
+    input: { productIds: string[] },
+  ): Promise<EditFindProductoRow[]> {
+    return manager
+      .getRepository(Product)
+      .createQueryBuilder('p')
+      .select([
+        'p.id_producto AS id',
+        'p.precio_ctvs AS price',
+        'p.controla_inventario AS tracks',
+      ])
+      .innerJoin(Category, 'c', 'c.id_categoria=p.id_categoria')
+      .where(
+        'p.id_producto=ANY(:ids::uuid[]) AND p.activo AND p.visible_menu AND c.activa',
+      )
+      .addOrderBy('p.id_producto', 'ASC')
+      .setLock('pessimistic_read', undefined, ['p', 'c'])
+      .setParameters({ ids: input.productIds })
+      .getRawMany<EditFindProductoRow>();
+  }
+
   async increaseReservedQuantity(
     manager: EntityManager,
     input: { inventoryId: string; quantity: number },

@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { type EntityManager } from 'typeorm';
 import { UserSession } from '../../auth/entities/user-session.entity.js';
 import { StaffSessionState } from '../../auth/types/authorization.types.js';
@@ -7,6 +11,42 @@ import { User } from '../../users/entities/user.entity.js';
 
 @Injectable()
 export class AuthorizationService {
+  async requirePermission(
+    manager: EntityManager,
+    identity: { userId?: string; sessionId?: string },
+    permission: string,
+    options: {
+      adminOnly?: boolean;
+      unauthorizedMessage?: string;
+      permissionMessage?: string;
+      adminMessage?: string;
+    } = {},
+  ): Promise<StaffSessionState> {
+    if (!identity.userId || !identity.sessionId)
+      throw new UnauthorizedException(
+        options.unauthorizedMessage ?? 'Sesión no válida.',
+      );
+    const row = await this.lockSession(
+      manager,
+      identity.userId,
+      identity.sessionId,
+      permission,
+    );
+    if (!row || !row.activo || row.revocada_en || !row.valid)
+      throw new UnauthorizedException(
+        options.unauthorizedMessage ?? 'Sesión no válida.',
+      );
+    if (options.adminOnly && row.role !== 'admin')
+      throw new ForbiddenException(
+        options.adminMessage ?? 'Solo un administrador puede realizar esto.',
+      );
+    if (!row.allowed)
+      throw new ForbiddenException(
+        options.permissionMessage ?? 'Permiso insuficiente.',
+      );
+    return row;
+  }
+
   async lockSession(
     manager: EntityManager,
     userId: string | undefined,

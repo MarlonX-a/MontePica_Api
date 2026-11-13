@@ -214,6 +214,27 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       return { table, visit, qr };
     }
 
+    async function createApprovedParticipant(
+      visitId: string,
+      qrToken: string,
+      clientToken: string,
+      alias: string,
+      keyPrefix: string,
+    ) {
+      const participant = await request(http())
+        .post(`/api/v1/visits/${visitId}/participants`)
+        .set('Authorization', auth(clientToken))
+        .set('Idempotency-Key', `${keyPrefix}-request`)
+        .send({ qrToken, alias })
+        .expect(201);
+      await request(http())
+        .post(`/api/v1/admin/participants/${participant.body.id}/approve`)
+        .set('Authorization', auth(tokens.worker))
+        .set('Idempotency-Key', `${keyPrefix}-approve`)
+        .expect(200);
+      return participant;
+    }
+
     async function failAudit(event: string) {
       await db.query(`CREATE FUNCTION reject_test_audit() RETURNS trigger AS $$ BEGIN
       IF NEW.evento = '${event}' THEN RAISE EXCEPTION 'test audit failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
@@ -463,17 +484,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       const f = await fixture();
       const guest = await guests.create({ name: 'Pedido' });
       const other = await guests.create({ name: 'Otro' });
-      const p = await request(http())
-        .post(`/api/v1/visits/${f.visit.id}/participants`)
-        .set('Authorization', auth(guest.token))
-        .set('Idempotency-Key', 'order-participant')
-        .send({ qrToken: f.qr.qrToken, alias: 'Pedido' })
-        .expect(201);
-      await request(http())
-        .post(`/api/v1/admin/participants/${p.body.id}/approve`)
-        .set('Authorization', auth(tokens.worker))
-        .set('Idempotency-Key', 'order-approve')
-        .expect(200);
+      const p = await createApprovedParticipant(
+        f.visit.id,
+        f.qr.qrToken,
+        guest.token,
+        'Pedido',
+        'order',
+      );
       const [category] = await db.query(
         `INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Pedido test','pedido test') RETURNING id_categoria`,
       );
@@ -804,17 +821,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     it('serializes cancellation against preparation', async () => {
       const f = await fixture();
       const guest = await guests.create({ name: 'Carrera' });
-      const p = await request(http())
-        .post(`/api/v1/visits/${f.visit.id}/participants`)
-        .set('Authorization', auth(guest.token))
-        .set('Idempotency-Key', 'racer-participant')
-        .send({ qrToken: f.qr.qrToken, alias: 'Carrera' })
-        .expect(201);
-      await request(http())
-        .post(`/api/v1/admin/participants/${p.body.id}/approve`)
-        .set('Authorization', auth(tokens.worker))
-        .set('Idempotency-Key', 'racer-approve')
-        .expect(200);
+      await createApprovedParticipant(
+        f.visit.id,
+        f.qr.qrToken,
+        guest.token,
+        'Carrera',
+        'racer',
+      );
       const [category] = await db.query(
         `INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Carrera ciclo','carrera ciclo') RETURNING id_categoria`,
       );
@@ -1905,17 +1918,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     it('serializes cash collection against cancellation without duplicate income', async () => {
       const f = await fixture();
       const guest = await guests.create({ name: 'Carrera de pago' });
-      const p = await request(http())
-        .post(`/api/v1/visits/${f.visit.id}/participants`)
-        .set('Authorization', auth(guest.token))
-        .set('Idempotency-Key', 'payment-race-participant')
-        .send({ qrToken: f.qr.qrToken, alias: 'Carrera' })
-        .expect(201);
-      await request(http())
-        .post(`/api/v1/admin/participants/${p.body.id}/approve`)
-        .set('Authorization', auth(tokens.worker))
-        .set('Idempotency-Key', 'payment-race-approve')
-        .expect(200);
+      await createApprovedParticipant(
+        f.visit.id,
+        f.qr.qrToken,
+        guest.token,
+        'Carrera',
+        'payment-race',
+      );
       const [category] = await db.query(
         `INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Carrera pago','carrera pago') RETURNING id_categoria`,
       );
@@ -2188,17 +2197,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     it('closes a zero-total settlement without inserting a payment', async () => {
       const f = await fixture();
       const guest = await guests.create({ name: 'Cortesía' });
-      const p = await request(http())
-        .post(`/api/v1/visits/${f.visit.id}/participants`)
-        .set('Authorization', auth(guest.token))
-        .set('Idempotency-Key', 'zero-participant')
-        .send({ qrToken: f.qr.qrToken, alias: 'Cortesía' })
-        .expect(201);
-      await request(http())
-        .post(`/api/v1/admin/participants/${p.body.id}/approve`)
-        .set('Authorization', auth(tokens.worker))
-        .set('Idempotency-Key', 'zero-approve')
-        .expect(200);
+      await createApprovedParticipant(
+        f.visit.id,
+        f.qr.qrToken,
+        guest.token,
+        'Cortesía',
+        'zero',
+      );
       const [category] = await db.query(
         `INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Gratis','gratis') RETURNING id_categoria`,
       );
@@ -2450,17 +2455,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
 
     it('allows a registered customer to submit a private transfer receipt', async () => {
       const f = await fixture();
-      const p = await request(http())
-        .post(`/api/v1/visits/${f.visit.id}/participants`)
-        .set('Authorization', auth(tokens.client))
-        .set('Idempotency-Key', 'registered-transfer-participant')
-        .send({ qrToken: f.qr.qrToken, alias: 'Cliente' })
-        .expect(201);
-      await request(http())
-        .post(`/api/v1/admin/participants/${p.body.id}/approve`)
-        .set('Authorization', auth(tokens.worker))
-        .set('Idempotency-Key', 'registered-transfer-approve')
-        .expect(200);
+      await createApprovedParticipant(
+        f.visit.id,
+        f.qr.qrToken,
+        tokens.client,
+        'Cliente',
+        'registered-transfer',
+      );
       const [category] = await db.query(
         `INSERT INTO categoria(nombre,nombre_normalizado) VALUES ('Registrado transferencia','registrado transferencia') RETURNING id_categoria`,
       );

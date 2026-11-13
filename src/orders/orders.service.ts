@@ -11,8 +11,6 @@ import { EntityManager, Repository } from 'typeorm';
 import { ConsumptionAccount } from '../accounts/entities/consumption-account.entity.js';
 import { ConsumptionAssignment } from '../accounts/entities/consumption-assignment.entity.js';
 import { CashRegister } from '../cash/entities/cash-register.entity.js';
-import { Category } from '../catalog/entities/category.entity.js';
-import { Product } from '../catalog/entities/product.entity.js';
 import { AuditService } from '../common/audit/audit.service.js';
 import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
 import { type ClientIdentity } from '../common/identity/client-access.guard.js';
@@ -48,7 +46,6 @@ import {
   CreateInsertPedidoRow,
   CreateInsertVersionPedidoRow,
   EditFindLiquidacionRow,
-  EditFindProductoRow,
   EditInsertDetallePedidoRow,
 } from './types/orders.types.js';
 
@@ -116,7 +113,9 @@ export class OrdersService {
             'La cuenta tiene una liquidación pendiente.',
           );
         const products: Array<{ id: string; price: number; tracks: boolean }> =
-          await this.editFindProducto(m, { ids });
+          await this.inventoryOperations.lockAvailableProducts(m, {
+            productIds: ids,
+          });
         if (products.length !== ids.length)
           throw new ConflictException(
             'Uno o más productos no están disponibles.',
@@ -273,7 +272,9 @@ export class OrdersService {
           id: day.id,
         });
         const products: Array<{ id: string; price: number; tracks: boolean }> =
-          await this.editFindProducto(m, { ids });
+          await this.inventoryOperations.lockAvailableProducts(m, {
+            productIds: ids,
+          });
         if (products.length !== ids.length)
           throw new ConflictException(
             'Uno o más productos no están disponibles.',
@@ -409,28 +410,6 @@ export class OrdersService {
       .where("id_cuenta=:id_cuenta AND estado='pending'")
       .setParameters({ id_cuenta: input.id_cuenta })
       .getRawMany<EditFindLiquidacionRow>();
-  }
-
-  private editFindProducto(
-    manager: EntityManager,
-    input: { ids: string[] },
-  ): Promise<EditFindProductoRow[]> {
-    return manager
-      .getRepository(Product)
-      .createQueryBuilder('p')
-      .select([
-        'p.id_producto AS id',
-        'p.precio_ctvs AS price',
-        'p.controla_inventario AS tracks',
-      ])
-      .innerJoin(Category, 'c', 'c.id_categoria=p.id_categoria')
-      .where(
-        'p.id_producto=ANY(:ids::uuid[]) AND p.activo AND p.visible_menu AND c.activa',
-      )
-      .addOrderBy('p.id_producto', 'ASC')
-      .setLock('pessimistic_read', undefined, ['p', 'c'])
-      .setParameters({ ids: input.ids })
-      .getRawMany<EditFindProductoRow>();
   }
 
   private editInsertDetallePedido(

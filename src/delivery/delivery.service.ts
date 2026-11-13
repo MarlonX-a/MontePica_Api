@@ -1,10 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
@@ -29,8 +27,6 @@ import {
   CreateInsertSolicitudDomicilioRow,
   DetailFindConfigDomicilioRow,
   SettingsFindConfigDomicilioRow,
-  StaffFindUsuarioNextRow,
-  StaffFindUsuarioRow,
   TransitionFindEntregaDomicilioRow,
   TransitionFindSolicitudDomicilioRow,
   UpdateSettingsInsertConfigDomicilioRow,
@@ -53,20 +49,9 @@ export class DeliveryService {
     actor: AuthenticatedRequestContext,
     permission: string,
   ) {
-    const [session] = await this.staffFindUsuario(m, {
-      userId: actor.userId,
-      sessionId: actor.sessionId,
+    await this.authorization.requirePermission(m, actor, permission, {
+      permissionMessage: 'No tienes permiso para realizar esta acción.',
     });
-    if (!session || !session.activo || session.revocada_en || !session.valid)
-      throw new UnauthorizedException('Sesión no válida.');
-    const [p] = await this.staffFindUsuarioNext(m, {
-      userId: actor.userId,
-      permission,
-    });
-    if (!p)
-      throw new ForbiddenException(
-        'No tienes permiso para realizar esta acción.',
-      );
   }
 
   async settings(m: EntityManager = this.records.manager) {
@@ -340,32 +325,6 @@ export class DeliveryService {
         })
         .execute();
     return targets;
-  }
-
-  private async staffFindUsuario(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<StaffFindUsuarioRow[]> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-      undefined,
-    );
-    return row ? [row] : [];
-  }
-
-  private async staffFindUsuarioNext(
-    manager: EntityManager,
-    input: { userId: string; permission: string },
-  ): Promise<StaffFindUsuarioNextRow[]> {
-    return (await this.authorization.hasPermission(
-      manager,
-      input.userId,
-      input.permission,
-    ))
-      ? [{ '1': '1' }]
-      : [];
   }
 
   private settingsFindConfigDomicilio(

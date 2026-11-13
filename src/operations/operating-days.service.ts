@@ -1,9 +1,7 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -25,7 +23,6 @@ import { OperatingDayClosure } from './entities/operating-day-closure.entity.js'
 import { OperatingDay } from './entities/operating-day.entity.js';
 import { OperationsSettings } from './entities/operations-settings.entity.js';
 import {
-  AuthorizedOperatingActionRow,
   OpenOperatingDayRow,
   OperatingDayRow,
 } from './types/operating-days.types.js';
@@ -196,24 +193,17 @@ export class OperatingDaysService {
     actor: AuthenticatedRequestContext,
     action: 'close' | 'exception',
   ) {
-    if (!actor?.userId || !actor?.sessionId)
-      throw new UnauthorizedException('Sesión no válida.');
-    const row =
+    await this.authorization.requirePermission(
+      manager,
+      actor,
       action === 'close'
-        ? await this.closeDayRole(manager, {
-            userId: actor.userId,
-            sessionId: actor.sessionId,
-          })
-        : await this.exceptionOpeningRole(manager, {
-            userId: actor.userId,
-            sessionId: actor.sessionId,
-          });
-    if (!row || !row.activo || row.revocada_en || !row.valid)
-      throw new UnauthorizedException('Sesión no válida.');
-    if (row.role !== 'admin' || !row.allowed)
-      throw new ForbiddenException(
-        'Solo un administrador puede realizar esta operación.',
-      );
+        ? 'operations.closeDay'
+        : 'operations.openWithPendingDays',
+      {
+        adminOnly: true,
+        adminMessage: 'Solo un administrador puede realizar esta operación.',
+      },
+    );
   }
 
   private async getSettingsWith(
@@ -488,31 +478,5 @@ export class OperatingDaysService {
       .setParameters({ previousDayIds: input.previousDayIds })
       .execute();
     return day;
-  }
-
-  private async closeDayRole(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<AuthorizedOperatingActionRow | undefined> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-      'operations.closeDay',
-    );
-    return row;
-  }
-
-  private async exceptionOpeningRole(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<AuthorizedOperatingActionRow | undefined> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-      'operations.openWithPendingDays',
-    );
-    return row;
   }
 }
