@@ -23,7 +23,7 @@ import {
 export class DeliveryLifecycleService {
   constructor(private readonly auditLog: AuditService) {}
 
-  async expireDeliveryFindPedido(
+  expireDeliveryFindPedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<ExpireDeliveryFindPedidoRow[]> {
@@ -59,7 +59,7 @@ export class DeliveryLifecycleService {
       .getRawMany();
   }
 
-  async expireDeliveryFindPago(
+  expireDeliveryFindPago(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<ExpireDeliveryFindPagoRow[]> {
@@ -75,7 +75,7 @@ export class DeliveryLifecycleService {
       .getRawMany<ExpireDeliveryFindPagoRow>();
   }
 
-  async expireDeliveryFindReservaInventario(
+  expireDeliveryFindReservaInventario(
     manager: EntityManager,
     input: { id_version: string },
   ): Promise<ExpireDeliveryFindReservaInventarioRow[]> {

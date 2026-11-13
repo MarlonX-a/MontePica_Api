@@ -426,7 +426,7 @@ export class ParticipantsService {
     };
   }
 
-  private async closeOperatingDayFindVisitaMesa(
+  private closeOperatingDayFindVisitaMesa(
     manager: EntityManager,
     input: { dayId: string },
   ): Promise<CloseOperatingDayFindVisitaMesaRow[]> {
@@ -441,7 +441,7 @@ export class ParticipantsService {
       .getRawMany<CloseOperatingDayFindVisitaMesaRow>();
   }
 
-  private async authenticateFindSesionCliente(
+  private authenticateFindSesionCliente(
     manager: EntityManager,
     input: { guestSessionId: string; clientId: string },
   ): Promise<AuthenticateFindSesionClienteRow[]> {
@@ -460,7 +460,7 @@ export class ParticipantsService {
       .getRawMany<AuthenticateFindSesionClienteRow>();
   }
 
-  private async authenticateFindCliente(
+  private authenticateFindCliente(
     manager: EntityManager,
     input: {
       clientId: string;
@@ -487,7 +487,7 @@ export class ParticipantsService {
       .getRawMany<AuthenticateFindClienteRow>();
   }
 
-  private async authenticateFindParticipante(
+  private authenticateFindParticipante(
     manager: EntityManager,
     input: { participantId: string; clientId: string },
   ): Promise<AuthenticateFindParticipanteRow[]> {
@@ -517,7 +517,7 @@ export class ParticipantsService {
       .getRawMany();
   }
 
-  private async requestFindParticipante(
+  private requestFindParticipante(
     manager: EntityManager,
     input: { visitId: string; clientId: string },
   ): Promise<RequestFindParticipanteRow[]> {
@@ -530,7 +530,7 @@ export class ParticipantsService {
       .getRawMany<RequestFindParticipanteRow>();
   }
 
-  private async requestInsertParticipante(
+  private requestInsertParticipante(
     manager: EntityManager,
     input: {
       visitId: string;
@@ -560,7 +560,7 @@ export class ParticipantsService {
       .then((result) => result.raw);
   }
 
-  private async getParticipantFindParticipante(
+  private getParticipantFindParticipante(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<GetParticipantFindParticipanteRow[]> {
@@ -582,7 +582,7 @@ export class ParticipantsService {
       .getRawMany<GetParticipantFindParticipanteRow>();
   }
 
-  private async participantsFindVisitaMesa(
+  private participantsFindVisitaMesa(
     manager: EntityManager,
     input: { visitId: string },
   ): Promise<ParticipantsFindVisitaMesaRow[]> {
@@ -595,7 +595,7 @@ export class ParticipantsService {
       .getRawMany<ParticipantsFindVisitaMesaRow>();
   }
 
-  private async visitFindVisitaMesa(
+  private visitFindVisitaMesa(
     manager: EntityManager,
     input: { id: string },
   ): Promise<VisitFindVisitaMesaRow[]> {
@@ -617,7 +617,7 @@ export class ParticipantsService {
       .getRawMany<VisitFindVisitaMesaRow>();
   }
 
-  private async transitionFindParticipante(
+  private transitionFindParticipante(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TransitionFindParticipanteRow[]> {
@@ -630,7 +630,7 @@ export class ParticipantsService {
       .getRawMany<TransitionFindParticipanteRow>();
   }
 
-  private async transitionFindParticipanteNext(
+  private transitionFindParticipanteNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TransitionFindParticipanteNextRow[]> {
@@ -658,7 +658,7 @@ export class ParticipantsService {
       .getRawMany<TransitionFindParticipanteNextRow>();
   }
 
-  private async transitionFindVisitaMesa(
+  private transitionFindVisitaMesa(
     manager: EntityManager,
     input: { visitId: string },
   ): Promise<TransitionFindVisitaMesaRow[]> {
@@ -672,7 +672,7 @@ export class ParticipantsService {
       .getRawMany<TransitionFindVisitaMesaRow>();
   }
 
-  private async transitionFindSesionCliente(
+  private transitionFindSesionCliente(
     manager: EntityManager,
     input: { sesion_origen_id: string },
   ): Promise<TransitionFindSesionClienteRow[]> {
@@ -688,7 +688,7 @@ export class ParticipantsService {
       .getRawMany<TransitionFindSesionClienteRow>();
   }
 
-  private async transitionFindParticipanteNextNext(
+  private transitionFindParticipanteNextNext(
     manager: EntityManager,
     input: { clientId: string },
   ): Promise<TransitionFindParticipanteNextNextRow[]> {
@@ -737,7 +737,7 @@ export class ParticipantsService {
       .execute();
   }
 
-  private async lockVisitFindVisitaMesa(
+  private lockVisitFindVisitaMesa(
     manager: EntityManager,
     input: { visitId: string },
   ): Promise<LockVisitFindVisitaMesaRow[]> {
@@ -778,7 +778,7 @@ export class ParticipantsService {
       .getRawMany();
   }
 
-  private async lockVisitFindVisitaMesaNext(
+  private lockVisitFindVisitaMesaNext(
     manager: EntityManager,
     input: { visitId: string },
   ): Promise<LockVisitFindVisitaMesaNextRow[]> {
@@ -792,7 +792,7 @@ export class ParticipantsService {
       .getRawMany<LockVisitFindVisitaMesaNextRow>();
   }
 
-  private async closeFindParticipante(
+  private closeFindParticipante(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CloseFindParticipanteRow[]> {
@@ -845,7 +845,7 @@ export class ParticipantsService {
       .execute();
   }
 
-  private async assertAccountsEmptyFindParticipante(
+  private assertAccountsEmptyFindParticipante(
     manager: EntityManager,
     parameters: unknown[],
     scope: 'participant' | 'visit',

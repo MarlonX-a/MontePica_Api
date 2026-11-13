@@ -17,7 +17,7 @@ export class ParticipationIdempotencyService {
     private readonly records: IdempotencyRecordsService,
   ) {}
 
-  async run<T>(
+  run<T>(
     actor: TableActor,
     operation: string,
     key: string | undefined,

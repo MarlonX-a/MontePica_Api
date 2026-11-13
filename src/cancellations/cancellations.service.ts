@@ -409,7 +409,7 @@ export class CancellationsService {
       : [];
   }
 
-  private async createFindPedido(
+  private createFindPedido(
     manager: EntityManager,
     input: { orderId: string; clientId: string },
   ): Promise<CreateFindPedidoRow[]> {
@@ -423,7 +423,7 @@ export class CancellationsService {
       .getRawMany<CreateFindPedidoRow>();
   }
 
-  private async createFindPedidoNext(
+  private createFindPedidoNext(
     manager: EntityManager,
     input: { orderId: string },
   ): Promise<CreateFindPedidoNextRow[]> {
@@ -443,7 +443,7 @@ export class CancellationsService {
       .getRawMany<CreateFindPedidoNextRow>();
   }
 
-  private async createFindLiquidacion(
+  private createFindLiquidacion(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<CreateFindLiquidacionRow[]> {
@@ -457,7 +457,7 @@ export class CancellationsService {
       .getRawMany<CreateFindLiquidacionRow>();
   }
 
-  private async createFindSolicitudCancelacion(
+  private createFindSolicitudCancelacion(
     manager: EntityManager,
     input: { orderId: string },
   ): Promise<CreateFindSolicitudCancelacionRow[]> {
@@ -470,7 +470,7 @@ export class CancellationsService {
       .getRawMany<CreateFindSolicitudCancelacionRow>();
   }
 
-  private async createFindLiquidacionNext(
+  private createFindLiquidacionNext(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<CreateFindLiquidacionNextRow[]> {
@@ -484,7 +484,7 @@ export class CancellationsService {
       .getRawMany<CreateFindLiquidacionNextRow>();
   }
 
-  private async createInsertSolicitudCancelacion(
+  private createInsertSolicitudCancelacion(
     manager: EntityManager,
     input: {
       orderId: string;
@@ -535,7 +535,7 @@ export class CancellationsService {
       .execute();
   }
 
-  private async detailFindSolicitudCancelacion(
+  private detailFindSolicitudCancelacion(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<DetailFindSolicitudCancelacionRow[]> {
@@ -566,7 +566,7 @@ export class CancellationsService {
       .getRawMany<DetailFindSolicitudCancelacionRow>();
   }
 
-  private async detailFindHistorialCancelacion(
+  private detailFindHistorialCancelacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DetailFindHistorialCancelacionRow[]> {
@@ -586,7 +586,7 @@ export class CancellationsService {
       .getRawMany<DetailFindHistorialCancelacionRow>();
   }
 
-  private async decideFindSolicitudCancelacion(
+  private decideFindSolicitudCancelacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindSolicitudCancelacionRow[]> {
@@ -610,7 +610,7 @@ export class CancellationsService {
       .getRawMany<DecideFindSolicitudCancelacionRow>();
   }
 
-  private async decideFindVersionPedido(
+  private decideFindVersionPedido(
     manager: EntityManager,
     input: { id_pedido: string },
   ): Promise<DecideFindVersionPedidoRow[]> {
@@ -623,7 +623,7 @@ export class CancellationsService {
       .getRawMany<DecideFindVersionPedidoRow>();
   }
 
-  private async decideFindPago(
+  private decideFindPago(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<DecideFindPagoRow[]> {
@@ -764,7 +764,7 @@ export class CancellationsService {
       .execute();
   }
 
-  private async decideInsertDevolucion(
+  private decideInsertDevolucion(
     manager: EntityManager,
     input: {
       id: string;

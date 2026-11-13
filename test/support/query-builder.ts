@@ -36,8 +36,10 @@ export function createQueryManager() {
       set: vi.fn(),
       returning: vi.fn(),
       onConflict: vi.fn(),
-      getRawMany: vi.fn(async () => reads.shift() ?? []),
-      execute: vi.fn(async () => writes.shift() ?? { raw: [], affected: 1 }),
+      getRawMany: vi.fn( () => reads.shift() ?? []),
+      execute: vi.fn(() =>
+        Promise.resolve(writes.shift() ?? { raw: [], affected: 1 }),
+      ),
     };
     for (const [name, mock] of Object.entries(builder))
       if (!['getRawMany', 'execute'].includes(name))

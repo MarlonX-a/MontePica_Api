@@ -185,7 +185,7 @@ export class RedemptionReservationsService {
       .execute();
   }
 
-  private async releaseFindReservaInventarioCanje(
+  private releaseFindReservaInventarioCanje(
     manager: EntityManager,
     input: { id: string },
   ): Promise<ReleaseFindReservaInventarioCanjeRow[]> {
@@ -259,7 +259,7 @@ export class RedemptionReservationsService {
       .execute();
   }
 
-  private async releaseForParticipantFindSolicitudCanje(
+  private releaseForParticipantFindSolicitudCanje(
     manager: EntityManager,
     input: { participantId: string },
   ): Promise<ReleaseForParticipantFindSolicitudCanjeRow[]> {
@@ -274,7 +274,7 @@ export class RedemptionReservationsService {
       .getRawMany<ReleaseForParticipantFindSolicitudCanjeRow>();
   }
 
-  private async releaseForVisitFindSolicitudCanje(
+  private releaseForVisitFindSolicitudCanje(
     manager: EntityManager,
     input: { visitId: string },
   ): Promise<ReleaseForVisitFindSolicitudCanjeRow[]> {
@@ -290,7 +290,7 @@ export class RedemptionReservationsService {
       .getRawMany<ReleaseForVisitFindSolicitudCanjeRow>();
   }
 
-  private async releaseForOperatingDayFindSolicitudCanje(
+  private releaseForOperatingDayFindSolicitudCanje(
     manager: EntityManager,
     input: { dayId: string },
   ): Promise<ReleaseForOperatingDayFindSolicitudCanjeRow[]> {
@@ -306,7 +306,7 @@ export class RedemptionReservationsService {
       .getRawMany<ReleaseForOperatingDayFindSolicitudCanjeRow>();
   }
 
-  private async refundForOrderFindSolicitudCanje(
+  private refundForOrderFindSolicitudCanje(
     manager: EntityManager,
     input: { orderId: string },
   ): Promise<RefundForOrderFindSolicitudCanjeRow[]> {
@@ -320,7 +320,7 @@ export class RedemptionReservationsService {
       .getRawMany<RefundForOrderFindSolicitudCanjeRow>();
   }
 
-  private async refundForOrderInsertMovimientoPuntos(
+  private refundForOrderInsertMovimientoPuntos(
     manager: EntityManager,
     input: { client: string; id: string; points: string },
   ): Promise<RefundForOrderInsertMovimientoPuntosRow[]> {
@@ -342,7 +342,7 @@ export class RedemptionReservationsService {
       .then((result) => result.raw);
   }
 
-  private async ensurePointBalanceFindMovimientoPuntos(
+  private ensurePointBalanceFindMovimientoPuntos(
     manager: EntityManager,
     input: { clientId: string },
   ): Promise<EnsurePointBalanceFindMovimientoPuntosRow[]> {

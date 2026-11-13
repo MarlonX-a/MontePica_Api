@@ -255,7 +255,7 @@ export class RefundsService {
       : [];
   }
 
-  private async refundFindDevolucion(
+  private refundFindDevolucion(
     manager: EntityManager,
     input: { id: string; clientId: string | null; admin: boolean },
   ): Promise<RefundFindDevolucionRow[]> {
@@ -293,7 +293,7 @@ export class RefundsService {
       .getRawMany<RefundFindDevolucionRow>();
   }
 
-  private async refundFindHistorialDevolucion(
+  private refundFindHistorialDevolucion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<RefundFindHistorialDevolucionRow[]> {
@@ -310,7 +310,7 @@ export class RefundsService {
       .getRawMany<RefundFindHistorialDevolucionRow>();
   }
 
-  private async executeRefundFindDevolucion(
+  private executeRefundFindDevolucion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<ExecuteRefundFindDevolucionRow[]> {
@@ -328,7 +328,7 @@ export class RefundsService {
       .getRawMany<ExecuteRefundFindDevolucionRow>();
   }
 
-  private async executeRefundFindConfiguracionOperativa(
+  private executeRefundFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<ExecuteRefundFindConfiguracionOperativaRow[]> {
     return manager
@@ -352,7 +352,7 @@ export class RefundsService {
       .getRawMany<ExecuteRefundFindConfiguracionOperativaRow>();
   }
 
-  private async executeRefundFindPago(
+  private executeRefundFindPago(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<ExecuteRefundFindPagoRow[]> {

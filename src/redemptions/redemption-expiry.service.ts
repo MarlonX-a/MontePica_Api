@@ -97,7 +97,7 @@ export class RedemptionExpiryService {
     }
   }
 
-  private async expirePendingFindSolicitudCanje(
+  private expirePendingFindSolicitudCanje(
     manager: EntityManager,
     input: { attempted: string[] },
   ): Promise<ExpirePendingFindSolicitudCanjeRow[]> {
@@ -115,7 +115,7 @@ export class RedemptionExpiryService {
       .getRawMany<ExpirePendingFindSolicitudCanjeRow>();
   }
 
-  private async expirePendingFindSolicitudCanjeNext(
+  private expirePendingFindSolicitudCanjeNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<ExpirePendingFindSolicitudCanjeNextRow[]> {

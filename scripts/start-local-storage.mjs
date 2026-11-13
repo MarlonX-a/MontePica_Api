@@ -1,13 +1,43 @@
 import 'dotenv/config';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { delimiter } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const { S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY } = process.env;
-if (!S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) throw new Error('Completa las credenciales S3 locales en .env.');
+if (!S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY)
+  throw new Error('Completa las credenciales S3 locales en .env.');
 mkdirSync('.local/storage', { recursive: true });
-writeFileSync('.local/storage/s3.json', JSON.stringify({ identities: [{ name: 'montepica-local',
-  credentials: [{ accessKey: S3_ACCESS_KEY_ID, secretKey: S3_SECRET_ACCESS_KEY }],
-  actions: ['Admin', 'Read', 'List', 'Tagging', 'Write'] }] }), { mode: 0o600 });
-const result = spawnSync('docker', ['compose', '-f', 'compose.storage.yaml', 'up', '-d'], { stdio: 'inherit' });
+writeFileSync(
+  '.local/storage/s3.json',
+  JSON.stringify({
+    identities: [
+      {
+        name: 'montepica-local',
+        credentials: [
+          { accessKey: S3_ACCESS_KEY_ID, secretKey: S3_SECRET_ACCESS_KEY },
+        ],
+        actions: ['Admin', 'Read', 'List', 'Tagging', 'Write'],
+      },
+    ],
+  }),
+  { mode: 0o600 },
+);
+const dockerCandidates =
+  process.platform === 'win32'
+    ? ['C:/Program Files/Docker/Docker/resources/bin/docker.exe']
+    : process.platform === 'darwin'
+      ? ['/opt/homebrew/bin/docker', '/usr/local/bin/docker']
+      : ['/usr/local/bin/docker', '/usr/bin/docker'];
+const docker = dockerCandidates.find((candidate) => existsSync(candidate));
+if (!docker) {
+  throw new Error(
+    `No se encontró Docker CLI en las ubicaciones estándar: ${dockerCandidates.join(delimiter)}.`,
+  );
+}
+const result = spawnSync(
+  docker,
+  ['compose', '-f', 'compose.storage.yaml', 'up', '-d'],
+  { stdio: 'inherit' },
+);
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;

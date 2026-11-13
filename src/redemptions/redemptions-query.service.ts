@@ -53,7 +53,7 @@ export class RedemptionsQueryService {
     return { items, total, page: q.page, limit: q.limit };
   }
 
-  private async redemptionFindSolicitudCanje(
+  private redemptionFindSolicitudCanje(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<RedemptionFindSolicitudCanjeRow[]> {
@@ -76,7 +76,7 @@ export class RedemptionsQueryService {
       .getRawMany<RedemptionFindSolicitudCanjeRow>();
   }
 
-  private async redemptionFindHistorialCanje(
+  private redemptionFindHistorialCanje(
     manager: EntityManager,
     input: { id: string },
   ): Promise<RedemptionFindHistorialCanjeRow[]> {

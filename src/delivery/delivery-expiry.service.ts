@@ -74,7 +74,7 @@ export class DeliveryExpiryService
     }
   }
 
-  private async sweepFindPedido(
+  private sweepFindPedido(
     manager: EntityManager,
   ): Promise<SweepFindPedidoRow[]> {
     return manager

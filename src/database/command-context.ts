@@ -18,9 +18,7 @@ import { createDatabaseOptions } from './database.options.js';
 class CommandContextModule {}
 
 /** A command owns its database connection and providers; it never starts HTTP or expiry tasks. */
-export async function createCommandContext(
-  kind: 'admin' | 'seed' | 'receipts',
-) {
+export function createCommandContext(kind: 'admin' | 'seed' | 'receipts') {
   const feature =
     kind === 'admin'
       ? BootstrapModule

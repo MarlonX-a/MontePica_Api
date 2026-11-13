@@ -435,7 +435,7 @@ export class TransfersService {
       : [];
   }
 
-  private async uploadFindLiquidacion(
+  private uploadFindLiquidacion(
     manager: EntityManager,
     input: { id: string; clientId: string },
   ): Promise<UploadFindLiquidacionRow[]> {
@@ -449,7 +449,7 @@ export class TransfersService {
       .getRawMany<UploadFindLiquidacionRow>();
   }
 
-  private async uploadFindLiquidacionNext(
+  private uploadFindLiquidacionNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UploadFindLiquidacionNextRow[]> {
@@ -463,7 +463,7 @@ export class TransfersService {
       .getRawMany<UploadFindLiquidacionNextRow>();
   }
 
-  private async uploadFindCaja(
+  private uploadFindCaja(
     manager: EntityManager,
     input: { id_caja: string; zone: string },
   ): Promise<UploadFindCajaRow[]> {
@@ -480,7 +480,7 @@ export class TransfersService {
       .getRawMany<UploadFindCajaRow>();
   }
 
-  private async uploadFindCuentaConsumo(
+  private uploadFindCuentaConsumo(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<UploadFindCuentaConsumoRow[]> {
@@ -494,7 +494,7 @@ export class TransfersService {
       .getRawMany<UploadFindCuentaConsumoRow>();
   }
 
-  private async uploadFindLiquidacionNextNext(
+  private uploadFindLiquidacionNextNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UploadFindLiquidacionNextNextRow[]> {
@@ -508,7 +508,7 @@ export class TransfersService {
       .getRawMany<UploadFindLiquidacionNextNextRow>();
   }
 
-  private async uploadFindPago(
+  private uploadFindPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UploadFindPagoRow[]> {
@@ -521,7 +521,7 @@ export class TransfersService {
       .getRawMany<UploadFindPagoRow>();
   }
 
-  private async uploadFindEntregaDomicilio(
+  private uploadFindEntregaDomicilio(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<UploadFindEntregaDomicilioRow[]> {
@@ -537,7 +537,7 @@ export class TransfersService {
       .getRawMany<UploadFindEntregaDomicilioRow>();
   }
 
-  private async uploadInsertPago(
+  private uploadInsertPago(
     manager: EntityManager,
     input: {
       id: string;
@@ -613,7 +613,7 @@ export class TransfersService {
       .execute();
   }
 
-  private async uploadFindComprobante(
+  private uploadFindComprobante(
     manager: EntityManager,
     input: { uploaded: string },
   ): Promise<UploadFindComprobanteRow[]> {
@@ -626,7 +626,7 @@ export class TransfersService {
       .getRawMany<UploadFindComprobanteRow>();
   }
 
-  private async decideFindPago(
+  private decideFindPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindPagoRow[]> {
@@ -658,7 +658,7 @@ export class TransfersService {
       .getRawMany();
   }
 
-  private async decideFindParticipante(
+  private decideFindParticipante(
     manager: EntityManager,
     input: { id_participante: string },
   ): Promise<DecideFindParticipanteRow[]> {
@@ -672,7 +672,7 @@ export class TransfersService {
       .getRawMany<DecideFindParticipanteRow>();
   }
 
-  private async decideFindLiquidacion(
+  private decideFindLiquidacion(
     manager: EntityManager,
     input: { id_liquidacion: string },
   ): Promise<DecideFindLiquidacionRow[]> {
@@ -686,7 +686,7 @@ export class TransfersService {
       .getRawMany<DecideFindLiquidacionRow>();
   }
 
-  private async decideFindPagoNext(
+  private decideFindPagoNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindPagoNextRow[]> {
@@ -745,7 +745,7 @@ export class TransfersService {
       .execute();
   }
 
-  private async decideFindPedido(
+  private decideFindPedido(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<DecideFindPedidoRow[]> {
@@ -783,7 +783,7 @@ export class TransfersService {
       .execute();
   }
 
-  private async decideFindLiquidacionNext(
+  private decideFindLiquidacionNext(
     manager: EntityManager,
     input: { id_liquidacion: string },
   ): Promise<DecideFindLiquidacionNextRow[]> {
@@ -796,7 +796,7 @@ export class TransfersService {
       .getRawMany<DecideFindLiquidacionNextRow>();
   }
 
-  private async receiptFindComprobante(
+  private receiptFindComprobante(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<ReceiptFindComprobanteRow[]> {

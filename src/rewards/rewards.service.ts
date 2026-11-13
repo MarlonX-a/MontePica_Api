@@ -222,7 +222,7 @@ export class RewardsService {
     return row ? [row] : [];
   }
 
-  private async createRewardFindProducto(
+  private createRewardFindProducto(
     manager: EntityManager,
     input: { productId: string },
   ): Promise<CreateRewardFindProductoRow[]> {
@@ -236,7 +236,7 @@ export class RewardsService {
       .getRawMany<CreateRewardFindProductoRow>();
   }
 
-  private async createRewardInsertRecompensa(
+  private createRewardInsertRecompensa(
     manager: EntityManager,
     input: {
       name: string;
@@ -266,7 +266,7 @@ export class RewardsService {
       .then((result) => result.raw);
   }
 
-  private async updateRewardFindRecompensa(
+  private updateRewardFindRecompensa(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UpdateRewardFindRecompensaRow[]> {
@@ -333,7 +333,7 @@ export class RewardsService {
     return rows;
   }
 
-  private async rewardFindRecompensa(
+  private rewardFindRecompensa(
     manager: EntityManager,
     input: { id: string },
   ): Promise<RewardFindRecompensaRow[]> {

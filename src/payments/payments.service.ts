@@ -269,7 +269,7 @@ export class PaymentsService {
       : [];
   }
 
-  private async collectFindLiquidacion(
+  private collectFindLiquidacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CollectFindLiquidacionRow[]> {
@@ -286,7 +286,7 @@ export class PaymentsService {
       .getRawMany<CollectFindLiquidacionRow>();
   }
 
-  private async collectFindCaja(
+  private collectFindCaja(
     manager: EntityManager,
     input: { id_caja: string; zone: string },
   ): Promise<CollectFindCajaRow[]> {
@@ -317,7 +317,7 @@ export class PaymentsService {
       .getRawMany();
   }
 
-  private async collectFindParticipante(
+  private collectFindParticipante(
     manager: EntityManager,
     input: { id_participante: string },
   ): Promise<CollectFindParticipanteRow[]> {
@@ -331,7 +331,7 @@ export class PaymentsService {
       .getRawMany<CollectFindParticipanteRow>();
   }
 
-  private async collectFindCuentaConsumo(
+  private collectFindCuentaConsumo(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<CollectFindCuentaConsumoRow[]> {
@@ -345,7 +345,7 @@ export class PaymentsService {
       .getRawMany<CollectFindCuentaConsumoRow>();
   }
 
-  private async collectFindLiquidacionNext(
+  private collectFindLiquidacionNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CollectFindLiquidacionNextRow[]> {
@@ -359,7 +359,7 @@ export class PaymentsService {
       .getRawMany<CollectFindLiquidacionNextRow>();
   }
 
-  private async collectFindPago(
+  private collectFindPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CollectFindPagoRow[]> {
@@ -374,7 +374,7 @@ export class PaymentsService {
       .getRawMany<CollectFindPagoRow>();
   }
 
-  private async collectInsertPago(
+  private collectInsertPago(
     manager: EntityManager,
     input: {
       id: string;
@@ -444,7 +444,7 @@ export class PaymentsService {
       .execute();
   }
 
-  private async detailFindDevolucion(
+  private detailFindDevolucion(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<DetailFindDevolucionRow[]> {
@@ -478,7 +478,7 @@ export class PaymentsService {
       .getRawMany<DetailFindDevolucionRow>();
   }
 
-  private async detailFindComprobante(
+  private detailFindComprobante(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DetailFindComprobanteRow[]> {
@@ -491,7 +491,7 @@ export class PaymentsService {
       .getRawMany<DetailFindComprobanteRow>();
   }
 
-  private async detailFindPago(
+  private detailFindPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DetailFindPagoRow[]> {
@@ -509,7 +509,7 @@ export class PaymentsService {
       .getRawMany<DetailFindPagoRow>();
   }
 
-  private async detailFindHistorialPago(
+  private detailFindHistorialPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DetailFindHistorialPagoRow[]> {

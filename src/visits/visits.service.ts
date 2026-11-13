@@ -30,7 +30,7 @@ export class VisitsService {
     private readonly operationalContext: OperationalContextService,
   ) {}
 
-  async openVisit(tableId: string, actor: string) {
+  openVisit(tableId: string, actor: string) {
     return this.db.transaction(async (manager) => {
       const timeZone =
         await this.operationalContext.lockTableOperations(manager);
@@ -77,7 +77,7 @@ export class VisitsService {
     });
   }
 
-  async issueQr(visitId: string, actor: string) {
+  issueQr(visitId: string, actor: string) {
     return this.db.transaction(async (manager) => {
       const timeZone =
         await this.operationalContext.lockTableOperations(manager);
@@ -110,7 +110,7 @@ export class VisitsService {
     });
   }
 
-  private async openVisitFindJornadaOperativa(
+  private openVisitFindJornadaOperativa(
     manager: EntityManager,
     input: { timeZone: string },
   ): Promise<OpenVisitFindJornadaOperativaRow[]> {
@@ -126,7 +126,7 @@ export class VisitsService {
       .getRawMany<OpenVisitFindJornadaOperativaRow>();
   }
 
-  private async openVisitFindMesa(
+  private openVisitFindMesa(
     manager: EntityManager,
     input: { tableId: string },
   ): Promise<OpenVisitFindMesaRow[]> {
@@ -140,7 +140,7 @@ export class VisitsService {
       .getRawMany<OpenVisitFindMesaRow>();
   }
 
-  private async openVisitFindJornadaOperativaNext(
+  private openVisitFindJornadaOperativaNext(
     manager: EntityManager,
     input: { id: string; timeZone: string },
   ): Promise<OpenVisitFindJornadaOperativaNextRow[]> {
@@ -155,7 +155,7 @@ export class VisitsService {
       .getRawMany<OpenVisitFindJornadaOperativaNextRow>();
   }
 
-  private async openVisitFindVisitaMesa(
+  private openVisitFindVisitaMesa(
     manager: EntityManager,
     input: { tableId: string },
   ): Promise<OpenVisitFindVisitaMesaRow[]> {
@@ -168,7 +168,7 @@ export class VisitsService {
       .getRawMany<OpenVisitFindVisitaMesaRow>();
   }
 
-  private async openVisitInsertVisitaMesa(
+  private openVisitInsertVisitaMesa(
     manager: EntityManager,
     input: { tableId: string; id: string; actor: string },
   ): Promise<OpenVisitInsertVisitaMesaRow[]> {

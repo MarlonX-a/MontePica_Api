@@ -221,7 +221,7 @@ export class OrdersEditingService {
     return this.queries.detail(id, clientId, history, m);
   }
 
-  private async editFindPedido(
+  private editFindPedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<EditFindPedidoRow[]> {
@@ -234,7 +234,7 @@ export class OrdersEditingService {
       .getRawMany<EditFindPedidoRow>();
   }
 
-  private async editFindPedidoNext(
+  private editFindPedidoNext(
     manager: EntityManager,
     input: { id: string; clientId: string },
   ): Promise<EditFindPedidoNextRow[]> {
@@ -259,7 +259,7 @@ export class OrdersEditingService {
       .getRawMany<EditFindPedidoNextRow>();
   }
 
-  private async editFindLiquidacion(
+  private editFindLiquidacion(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<EditFindLiquidacionRow[]> {
@@ -272,7 +272,7 @@ export class OrdersEditingService {
       .getRawMany<EditFindLiquidacionRow>();
   }
 
-  private async editFindProducto(
+  private editFindProducto(
     manager: EntityManager,
     input: { ids: string[] },
   ): Promise<EditFindProductoRow[]> {
@@ -294,7 +294,7 @@ export class OrdersEditingService {
       .getRawMany<EditFindProductoRow>();
   }
 
-  private async editFindDetallePedido(
+  private editFindDetallePedido(
     manager: EntityManager,
     input: { id_version: string },
   ): Promise<EditFindDetallePedidoRow[]> {
@@ -341,7 +341,7 @@ export class OrdersEditingService {
       .execute();
   }
 
-  private async editInsertVersionPedido(
+  private editInsertVersionPedido(
     manager: EntityManager,
     input: { id: string; numero: number; total: number; notes: string | null },
   ): Promise<EditInsertVersionPedidoRow[]> {
@@ -363,7 +363,7 @@ export class OrdersEditingService {
       .then((result) => result.raw);
   }
 
-  private async editInsertDetallePedido(
+  private editInsertDetallePedido(
     manager: EntityManager,
     input: {
       id: string;

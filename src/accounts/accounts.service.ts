@@ -89,7 +89,7 @@ export class AccountsService {
     };
   }
 
-  private async accountFindCuentaConsumo(
+  private accountFindCuentaConsumo(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<AccountFindCuentaConsumoRow[]> {
@@ -115,7 +115,7 @@ export class AccountsService {
       .getRawMany<AccountFindCuentaConsumoRow>();
   }
 
-  private async accountFindAsignacionConsumo(
+  private accountFindAsignacionConsumo(
     manager: EntityManager,
     input: { id: string },
   ): Promise<AccountFindAsignacionConsumoRow[]> {
@@ -144,7 +144,7 @@ export class AccountsService {
       .getRawMany<AccountFindAsignacionConsumoRow>();
   }
 
-  private async accountFindDetalleLiquidacion(
+  private accountFindDetalleLiquidacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<AccountFindDetalleLiquidacionRow[]> {
@@ -161,7 +161,7 @@ export class AccountsService {
       .getRawMany<AccountFindDetalleLiquidacionRow>();
   }
 
-  private async accountFindLiquidacion(
+  private accountFindLiquidacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<AccountFindLiquidacionRow[]> {
@@ -177,7 +177,7 @@ export class AccountsService {
       .getRawMany<AccountFindLiquidacionRow>();
   }
 
-  private async accountFindDevolucion(
+  private accountFindDevolucion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<AccountFindDevolucionRow[]> {
@@ -194,7 +194,7 @@ export class AccountsService {
       .getRawMany<AccountFindDevolucionRow>();
   }
 
-  private async accountFindLiquidacionNext(
+  private accountFindLiquidacionNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<AccountFindLiquidacionNextRow[]> {

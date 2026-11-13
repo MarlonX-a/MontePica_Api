@@ -132,7 +132,7 @@ export class PointsService {
     return this.queryMovements(this.records.manager, clientId, q);
   }
 
-  private async currentFindConfiguracionPuntos(
+  private currentFindConfiguracionPuntos(
     manager: EntityManager,
   ): Promise<CurrentFindConfiguracionPuntosRow[]> {
     return manager
@@ -159,7 +159,7 @@ export class PointsService {
     return row ? [row] : [];
   }
 
-  private async configureInsertConfiguracionPuntos(
+  private configureInsertConfiguracionPuntos(
     manager: EntityManager,
     input: { version: number; enabled: boolean; rate: number; userId: string },
   ): Promise<ConfigureInsertConfiguracionPuntosRow[]> {
@@ -180,7 +180,7 @@ export class PointsService {
       .then((result) => result.raw);
   }
 
-  private async balanceFindMovimientoPuntos(
+  private balanceFindMovimientoPuntos(
     manager: EntityManager,
     input: { clientId: string },
   ): Promise<BalanceFindMovimientoPuntosRow[]> {
@@ -194,7 +194,7 @@ export class PointsService {
       .getRawMany<BalanceFindMovimientoPuntosRow>();
   }
 
-  private async requireClientFindCliente(
+  private requireClientFindCliente(
     manager: EntityManager,
     input: { id: string },
   ): Promise<RequireClientFindClienteRow[]> {

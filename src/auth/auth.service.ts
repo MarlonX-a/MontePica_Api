@@ -104,7 +104,7 @@ export class AuthService {
     }
   }
 
-  async login(dto: LoginDto) {
+  login(dto: LoginDto) {
     const normalizedEmail = normalizeEmail(dto.email);
     return this.dataSource.transaction(async (manager) => {
       const user = await this.identities.lockUserByEmail(

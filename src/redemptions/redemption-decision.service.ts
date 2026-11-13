@@ -283,7 +283,7 @@ export class RedemptionDecisionService {
     return row ? [row] : [];
   }
 
-  private async requestFindLiquidacion(
+  private requestFindLiquidacion(
     manager: EntityManager,
     input: { account: string },
   ): Promise<RequestFindLiquidacionRow[]> {
@@ -310,7 +310,7 @@ export class RedemptionDecisionService {
       .getRawMany();
   }
 
-  private async decideFindSolicitudCanje(
+  private decideFindSolicitudCanje(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindSolicitudCanjeRow[]> {
@@ -337,7 +337,7 @@ export class RedemptionDecisionService {
       .getRawMany();
   }
 
-  private async decideFindSolicitudCanjeNext(
+  private decideFindSolicitudCanjeNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindSolicitudCanjeNextRow[]> {
@@ -365,7 +365,7 @@ export class RedemptionDecisionService {
       .getRawMany();
   }
 
-  private async decideFindSolicitudCanjeNextNext(
+  private decideFindSolicitudCanjeNextNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindSolicitudCanjeNextNextRow[]> {
@@ -413,7 +413,7 @@ export class RedemptionDecisionService {
       .execute();
   }
 
-  private async decideFindSolicitudCanjeNextNextNext(
+  private decideFindSolicitudCanjeNextNextNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindSolicitudCanjeNextNextNextRow[]> {
@@ -437,7 +437,7 @@ export class RedemptionDecisionService {
       .getRawMany<DecideFindSolicitudCanjeNextNextNextRow>();
   }
 
-  private async decideFindMovimientoPuntos(
+  private decideFindMovimientoPuntos(
     manager: EntityManager,
     input: { id_cliente: string; id: string },
   ): Promise<DecideFindMovimientoPuntosRow[]> {
@@ -451,7 +451,7 @@ export class RedemptionDecisionService {
       .getRawMany<DecideFindMovimientoPuntosRow>();
   }
 
-  private async decideFindReservaInventarioCanje(
+  private decideFindReservaInventarioCanje(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideFindReservaInventarioCanjeRow[]> {
@@ -468,7 +468,7 @@ export class RedemptionDecisionService {
       .getRawMany<DecideFindReservaInventarioCanjeRow>();
   }
 
-  private async decideInsertPedido(
+  private decideInsertPedido(
     manager: EntityManager,
     input: {
       id_jornada: string;
@@ -499,7 +499,7 @@ export class RedemptionDecisionService {
       .then((result) => result.raw);
   }
 
-  private async decideInsertVersionPedido(
+  private decideInsertVersionPedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DecideInsertVersionPedidoRow[]> {
@@ -520,7 +520,7 @@ export class RedemptionDecisionService {
       .then((result) => result.raw);
   }
 
-  private async decideInsertDetallePedido(
+  private decideInsertDetallePedido(
     manager: EntityManager,
     input: { id: string; id_producto: string; tracks: boolean },
   ): Promise<DecideInsertDetallePedidoRow[]> {

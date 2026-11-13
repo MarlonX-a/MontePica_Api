@@ -256,7 +256,7 @@ export class OperatingDaysService {
     }
   }
 
-  private async getSettingsFindConfiguracionOperativa(
+  private getSettingsFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<GetSettingsFindConfiguracionOperativaRow[]> {
     return manager
@@ -274,7 +274,7 @@ export class OperatingDaysService {
       .getRawMany<GetSettingsFindConfiguracionOperativaRow>();
   }
 
-  private async getCurrentFindOperation(
+  private getCurrentFindOperation(
     manager: EntityManager,
     input: { timeZone: string },
   ): Promise<GetCurrentFindOperationRow[]> {
@@ -288,7 +288,7 @@ export class OperatingDaysService {
       .getRawMany<GetCurrentFindOperationRow>();
   }
 
-  private async getCurrentFindJornadaOperativa(
+  private getCurrentFindJornadaOperativa(
     manager: EntityManager,
     input: { businessDate: string },
   ): Promise<GetCurrentFindJornadaOperativaRow[]> {
@@ -307,7 +307,7 @@ export class OperatingDaysService {
       .getRawMany<GetCurrentFindJornadaOperativaRow>();
   }
 
-  private async getCurrentFindCaja(
+  private getCurrentFindCaja(
     manager: EntityManager,
     input: { id: string },
   ): Promise<GetCurrentFindCajaRow[]> {
@@ -337,7 +337,7 @@ export class OperatingDaysService {
       .getRawMany<GetCurrentFindCajaRow>();
   }
 
-  private async openDayInsertJornadaOperativa(
+  private openDayInsertJornadaOperativa(
     manager: EntityManager,
     input: { timeZone: string; userId: string },
   ): Promise<OpenDayInsertJornadaOperativaRow[]> {
@@ -360,7 +360,7 @@ export class OperatingDaysService {
       .then((result) => result.raw);
   }
 
-  private async getSettingsWithFindConfiguracionOperativa(
+  private getSettingsWithFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<GetSettingsWithFindConfiguracionOperativaRow[]> {
     return manager
@@ -414,7 +414,7 @@ export class OperatingDaysService {
     return row;
   }
 
-  private async findOpenDayIds(
+  private findOpenDayIds(
     manager: EntityManager,
     timeZone: string,
   ): Promise<Array<{ id: string; businessDate: string }>> {
@@ -432,7 +432,7 @@ export class OperatingDaysService {
       .getRawMany();
   }
 
-  private async findCurrentDay(
+  private findCurrentDay(
     manager: EntityManager,
     timeZone: string,
   ): Promise<Array<{ id: string }>> {

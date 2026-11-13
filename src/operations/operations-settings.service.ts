@@ -36,7 +36,7 @@ export class OperationsSettingsService {
     return rows[0] as SettingsRow;
   }
 
-  async updateSettings(
+  updateSettings(
     dto: UpdateOperationsSettingsDto,
     actor: AuthenticatedRequestContext,
   ) {
@@ -119,7 +119,7 @@ export class OperationsSettingsService {
     }
   }
 
-  private async getSettingsFindConfiguracionOperativa(
+  private getSettingsFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<GetSettingsFindConfiguracionOperativaRow[]> {
     return manager
@@ -172,7 +172,7 @@ export class OperationsSettingsService {
     return rows;
   }
 
-  private async getSettingsWithFindConfiguracionOperativa(
+  private getSettingsWithFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<GetSettingsWithFindConfiguracionOperativaRow[]> {
     return manager

@@ -159,7 +159,7 @@ export class PointsLedgerService {
     if (!c) throw new NotFoundException('Cliente no encontrado.');
   }
 
-  private async currentFindConfiguracionPuntos(
+  private currentFindConfiguracionPuntos(
     manager: EntityManager,
   ): Promise<CurrentFindConfiguracionPuntosRow[]> {
     return manager
@@ -173,7 +173,7 @@ export class PointsLedgerService {
       .getRawMany<CurrentFindConfiguracionPuntosRow>();
   }
 
-  private async recordConfirmedPaymentFindDetalleLiquidacion(
+  private recordConfirmedPaymentFindDetalleLiquidacion(
     manager: EntityManager,
     input: { paymentId: string },
   ): Promise<RecordConfirmedPaymentFindDetalleLiquidacionRow[]> {
@@ -206,7 +206,7 @@ export class PointsLedgerService {
       .getRawMany();
   }
 
-  private async recordConfirmedPaymentInsertAcumulacionPuntos(
+  private recordConfirmedPaymentInsertAcumulacionPuntos(
     manager: EntityManager,
     input: {
       paymentId: string;
@@ -278,7 +278,7 @@ export class PointsLedgerService {
     return result.raw as DeliverOrderUpdateAcumulacionPuntosRow[];
   }
 
-  private async refundFindAcumulacionPuntos(
+  private refundFindAcumulacionPuntos(
     manager: EntityManager,
     input: { refundId: string },
   ): Promise<RefundFindAcumulacionPuntosRow[]> {
@@ -319,7 +319,7 @@ export class PointsLedgerService {
       .execute();
   }
 
-  private async balanceFindMovimientoPuntos(
+  private balanceFindMovimientoPuntos(
     manager: EntityManager,
     input: { clientId: string },
   ): Promise<BalanceFindMovimientoPuntosRow[]> {
@@ -333,7 +333,7 @@ export class PointsLedgerService {
       .getRawMany<BalanceFindMovimientoPuntosRow>();
   }
 
-  private async requireClientFindCliente(
+  private requireClientFindCliente(
     manager: EntityManager,
     input: { id: string },
   ): Promise<RequireClientFindClienteRow[]> {

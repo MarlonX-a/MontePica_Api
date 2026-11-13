@@ -61,7 +61,17 @@ try {
   const confirmation = await hidden('Confirma la contraseña: ');
   if (name.length < 1 || name.length > 160)
     throw new Error('El nombre debe tener entre 1 y 160 caracteres.');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320)
+  const [localPart, domain, ...extraParts] = email.split('@');
+  const topLevelDomain = domain?.slice(domain.lastIndexOf('.') + 1);
+  if (
+    email.length > 320 ||
+    !localPart ||
+    !domain ||
+    extraParts.length > 0 ||
+    email.split('').some((character) => character.trim() === '') ||
+    domain.lastIndexOf('.') < 1 ||
+    !topLevelDomain
+  )
     throw new Error('El correo no es válido.');
   if (password !== confirmation)
     throw new Error('Las contraseñas no coinciden.');

@@ -267,7 +267,7 @@ export class RedemptionsService {
     );
   }
 
-  private async clientFindCliente(
+  private clientFindCliente(
     manager: EntityManager,
     input: {
       clientId: string;
@@ -294,7 +294,7 @@ export class RedemptionsService {
       .getRawMany<ClientFindClienteRow>();
   }
 
-  private async requestFindParticipante(
+  private requestFindParticipante(
     manager: EntityManager,
     input: { visitId: string; clientId: string },
   ): Promise<RequestFindParticipanteRow[]> {
@@ -307,7 +307,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindParticipanteRow>();
   }
 
-  private async requestFindParticipanteNext(
+  private requestFindParticipanteNext(
     manager: EntityManager,
     input: { visitId: string; clientId: string },
   ): Promise<RequestFindParticipanteNextRow[]> {
@@ -324,7 +324,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindParticipanteNextRow>();
   }
 
-  private async requestFindCaja(
+  private requestFindCaja(
     manager: EntityManager,
     input: { dayId: string },
   ): Promise<RequestFindCajaRow[]> {
@@ -337,7 +337,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindCajaRow>();
   }
 
-  private async requestFindLiquidacion(
+  private requestFindLiquidacion(
     manager: EntityManager,
     input: { account: string },
   ): Promise<RequestFindLiquidacionRow[]> {
@@ -350,7 +350,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindLiquidacionRow>();
   }
 
-  private async requestFindRecompensa(
+  private requestFindRecompensa(
     manager: EntityManager,
     input: { rewardId: string },
   ): Promise<RequestFindRecompensaRow[]> {
@@ -382,7 +382,7 @@ export class RedemptionsService {
       .getRawMany();
   }
 
-  private async requestFindMovimientoPuntos(
+  private requestFindMovimientoPuntos(
     manager: EntityManager,
     input: { clientId: string },
   ): Promise<RequestFindMovimientoPuntosRow[]> {
@@ -395,7 +395,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindMovimientoPuntosRow>();
   }
 
-  private async requestFindReservaPuntosCanje(
+  private requestFindReservaPuntosCanje(
     manager: EntityManager,
     input: { clientId: string },
   ): Promise<RequestFindReservaPuntosCanjeRow[]> {
@@ -408,7 +408,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindReservaPuntosCanjeRow>();
   }
 
-  private async requestFindInventarioDiario(
+  private requestFindInventarioDiario(
     manager: EntityManager,
     input: { dayId: string; id_producto: string },
   ): Promise<RequestFindInventarioDiarioRow[]> {
@@ -422,7 +422,7 @@ export class RedemptionsService {
       .getRawMany<RequestFindInventarioDiarioRow>();
   }
 
-  private async requestInsertSolicitudCanje(
+  private requestInsertSolicitudCanje(
     manager: EntityManager,
     input: {
       clientId: string;
@@ -507,7 +507,7 @@ export class RedemptionsService {
       .execute();
   }
 
-  private async cancelFindSolicitudCanje(
+  private cancelFindSolicitudCanje(
     manager: EntityManager,
     input: { id: string; clientId: string },
   ): Promise<CancelFindSolicitudCanjeRow[]> {
@@ -520,7 +520,7 @@ export class RedemptionsService {
       .getRawMany<CancelFindSolicitudCanjeRow>();
   }
 
-  private async cancelFindSolicitudCanjeNext(
+  private cancelFindSolicitudCanjeNext(
     manager: EntityManager,
     input: { id: string; clientId: string },
   ): Promise<CancelFindSolicitudCanjeNextRow[]> {

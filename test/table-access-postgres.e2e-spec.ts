@@ -131,19 +131,19 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .overrideProvider(ReceiptStorageService)
         .useValue({
           prefix: 'test/receipts/',
-          put: async (key: string, body: Buffer) => {
+          put: (key: string, body: Buffer) => {
             if (receiptUnavailable)
               throw new ServiceUnavailableException(
                 'Almacenamiento no disponible.',
               );
             receiptObjects.set(key, Buffer.from(body));
           },
-          get: async (key: string) => {
+          get: (key: string) => {
             const body = receiptObjects.get(key);
             if (!body) throw new Error('missing');
             return body;
           },
-          delete: async (key: string) => {
+          delete: (key: string) => {
             receiptObjects.delete(key);
           },
         })
@@ -726,9 +726,9 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           .set('Idempotency-Key', 'order-vs-settlement')
           .send({ items: [{ productId: product.id_producto, quantity: 1 }] }),
       ]);
-      expect([raceSettlement.status, raceOrder.status].sort()).toEqual([
-        201, 409,
-      ]);
+      expect(
+        [raceSettlement.status, raceOrder.status].sort((a, b) => a - b),
+      ).toEqual([201, 409]);
     });
 
     it('serializes orders for the last stock and rolls back when audit fails', async () => {
@@ -844,7 +844,9 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           .set('Idempotency-Key', 'racer-start')
           .send({ expectedVersion: 1 }),
       ]);
-      expect([cancel.status, prepare.status].sort()).toEqual([200, 409]);
+      expect([cancel.status, prepare.status].sort((a, b) => a - b)).toEqual([
+        200, 409,
+      ]);
       const [stock] = await db.query(
         'SELECT cantidad_fisica,cantidad_reservada FROM inventario_diario WHERE id_producto=$1',
         [product.id_producto],
@@ -1015,7 +1017,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           .set('Idempotency-Key', 'delivery-race-cancel')
           .send({}),
       ]);
-      expect([approve.status, cancel.status].sort()).toEqual(
+      expect([approve.status, cancel.status].sort((a, b) => a - b)).toEqual(
         approve.status === 200 ? [200, 200] : [200, 409],
       );
       const stale = await submit(
@@ -1588,7 +1590,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     it('permits registered customers and prevents concurrent approvals at multiple tables', async () => {
       const a = await fixture();
       const b = await fixture();
-      async function ask(f: typeof a, key: string) {
+      function ask(f: typeof a, key: string) {
         return request(http())
           .post(`/api/v1/visits/${f.visit.id}/participants`)
           .set('Authorization', auth(tokens.client))
@@ -2104,7 +2106,9 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           .set('Idempotency-Key', 'transfer-race-reject')
           .send({ reason: 'Carrera' }),
       ]);
-      expect([confirmed.status, rejected.status].sort()).toEqual([200, 409]);
+      expect([confirmed.status, rejected.status].sort((a, b) => a - b)).toEqual(
+        [200, 409],
+      );
       if (confirmed.status === 200) await confirm().expect(200);
       else {
         const third = await upload('transfer-upload-3').expect(201);

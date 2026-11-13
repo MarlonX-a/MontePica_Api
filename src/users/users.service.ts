@@ -278,7 +278,7 @@ export class UsersService {
       throw new ConflictException(message);
   }
 
-  private async getUserFindUsuario(
+  private getUserFindUsuario(
     manager: EntityManager,
     input: { id: string },
   ): Promise<GetUserFindUsuarioRow[]> {
@@ -305,7 +305,7 @@ export class UsersService {
       .getRawMany<GetUserFindUsuarioRow>();
   }
 
-  private async createUserFindRol(
+  private createUserFindRol(
     manager: EntityManager,
     input: { roleCode: string },
   ): Promise<CreateUserFindRolRow[]> {
@@ -318,7 +318,7 @@ export class UsersService {
       .getRawMany<CreateUserFindRolRow>();
   }
 
-  private async createUserInsertUsuario(
+  private createUserInsertUsuario(
     manager: EntityManager,
     input: { id_rol: string; email: string; passwordHash: string },
   ): Promise<CreateUserInsertUsuarioRow[]> {
@@ -372,7 +372,7 @@ export class UsersService {
       .execute();
   }
 
-  private async updateUserFindUsuario(
+  private updateUserFindUsuario(
     manager: EntityManager,
   ): Promise<UpdateUserFindUsuarioRow[]> {
     return manager
@@ -426,7 +426,7 @@ export class UsersService {
       .execute();
   }
 
-  private async updateUserFindCliente(
+  private updateUserFindCliente(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UpdateUserFindClienteRow[]> {
@@ -473,7 +473,7 @@ export class UsersService {
     await this.locks.acquireAdministratorMembership(manager);
   }
 
-  private async getUserWithFindUsuario(
+  private getUserWithFindUsuario(
     manager: EntityManager,
     input: { id: string },
     lock: boolean,

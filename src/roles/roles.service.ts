@@ -16,7 +16,7 @@ export class RolesService {
     return this.queryListRoles(this.records.manager);
   }
 
-  private async listRolesFindRol(
+  private listRolesFindRol(
     manager: EntityManager,
   ): Promise<ListRolesFindRolRow[]> {
     return manager

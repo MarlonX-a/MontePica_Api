@@ -45,7 +45,7 @@ export class OrderInventoryService {
       .execute();
   }
 
-  async lockAvailableInventory(
+  lockAvailableInventory(
     manager: EntityManager,
     input: { operatingDayId: string; productIds: string[] },
   ): Promise<CreateFindInventarioDiarioRow[]> {
@@ -64,7 +64,7 @@ export class OrderInventoryService {
       .getRawMany<CreateFindInventarioDiarioRow>();
   }
 
-  async lockVersionReservations(
+  lockVersionReservations(
     manager: EntityManager,
     input: { versionId: string },
   ): Promise<EditFindReservaInventarioRow[]> {
@@ -84,7 +84,7 @@ export class OrderInventoryService {
       .getRawMany<EditFindReservaInventarioRow>();
   }
 
-  async lockReplacementInventory(
+  lockReplacementInventory(
     manager: EntityManager,
     input: {
       operatingDayId: string;
@@ -141,7 +141,7 @@ export class OrderInventoryService {
       .execute();
   }
 
-  async lockReservationsForConsumption(
+  lockReservationsForConsumption(
     manager: EntityManager,
     input: { versionId: string },
   ): Promise<TransitionFindReservaInventarioRow[]> {

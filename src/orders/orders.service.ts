@@ -398,7 +398,7 @@ export class OrdersService {
     return this.queries.detail(id, clientId, history, m);
   }
 
-  private async editFindLiquidacion(
+  private editFindLiquidacion(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<EditFindLiquidacionRow[]> {
@@ -411,7 +411,7 @@ export class OrdersService {
       .getRawMany<EditFindLiquidacionRow>();
   }
 
-  private async editFindProducto(
+  private editFindProducto(
     manager: EntityManager,
     input: { ids: string[] },
   ): Promise<EditFindProductoRow[]> {
@@ -433,7 +433,7 @@ export class OrdersService {
       .getRawMany<EditFindProductoRow>();
   }
 
-  private async editInsertDetallePedido(
+  private editInsertDetallePedido(
     manager: EntityManager,
     input: {
       id: string;
@@ -463,7 +463,7 @@ export class OrdersService {
       .then((result) => result.raw);
   }
 
-  private async createFindParticipante(
+  private createFindParticipante(
     manager: EntityManager,
     input: { visitId: string; clientId: string },
   ): Promise<CreateFindParticipanteRow[]> {
@@ -476,7 +476,7 @@ export class OrdersService {
       .getRawMany<CreateFindParticipanteRow>();
   }
 
-  private async createFindParticipanteNext(
+  private createFindParticipanteNext(
     manager: EntityManager,
     input: { visitId: string; clientId: string },
   ): Promise<CreateFindParticipanteNextRow[]> {
@@ -493,7 +493,7 @@ export class OrdersService {
       .getRawMany<CreateFindParticipanteNextRow>();
   }
 
-  private async createFindCaja(
+  private createFindCaja(
     manager: EntityManager,
     input: { day: string },
   ): Promise<CreateFindCajaRow[]> {
@@ -538,7 +538,7 @@ export class OrdersService {
     return result.raw as CreateInsertPedidoRow[];
   }
 
-  private async createInsertVersionPedido(
+  private createInsertVersionPedido(
     manager: EntityManager,
     input: { id: string; total: number; notes: string | null },
   ): Promise<CreateInsertVersionPedidoRow[]> {
@@ -606,7 +606,7 @@ export class OrdersService {
       .execute();
   }
 
-  private async createDeliveryFindSolicitudDomicilio(
+  private createDeliveryFindSolicitudDomicilio(
     manager: EntityManager,
     input: { requestId: string; clientId: string },
   ): Promise<CreateDeliveryFindSolicitudDomicilioRow[]> {
@@ -619,7 +619,7 @@ export class OrdersService {
       .getRawMany<CreateDeliveryFindSolicitudDomicilioRow>();
   }
 
-  private async createDeliveryFindJornadaOperativa(
+  private createDeliveryFindJornadaOperativa(
     manager: EntityManager,
     input: { zone: string },
   ): Promise<CreateDeliveryFindJornadaOperativaRow[]> {
@@ -636,7 +636,7 @@ export class OrdersService {
       .getRawMany<CreateDeliveryFindJornadaOperativaRow>();
   }
 
-  private async createDeliveryFindSolicitudDomicilioNext(
+  private createDeliveryFindSolicitudDomicilioNext(
     manager: EntityManager,
     input: { requestId: string },
   ): Promise<CreateDeliveryFindSolicitudDomicilioNextRow[]> {
@@ -655,7 +655,7 @@ export class OrdersService {
       .getRawMany<CreateDeliveryFindSolicitudDomicilioNextRow>();
   }
 
-  private async createDeliveryFindConfigDomicilio(
+  private createDeliveryFindConfigDomicilio(
     manager: EntityManager,
   ): Promise<CreateDeliveryFindConfigDomicilioRow[]> {
     return manager
@@ -676,7 +676,7 @@ export class OrdersService {
       .getRawMany<CreateDeliveryFindConfigDomicilioRow>();
   }
 
-  private async createDeliveryFindEntregaDomicilio(
+  private createDeliveryFindEntregaDomicilio(
     manager: EntityManager,
     input: { requestId: string },
   ): Promise<CreateDeliveryFindEntregaDomicilioRow[]> {
@@ -689,7 +689,7 @@ export class OrdersService {
       .getRawMany<CreateDeliveryFindEntregaDomicilioRow>();
   }
 
-  private async createDeliveryInsertCuentaConsumo(
+  private createDeliveryInsertCuentaConsumo(
     manager: EntityManager,
     input: { clientId: string; id: string },
   ): Promise<CreateDeliveryInsertCuentaConsumoRow[]> {
@@ -709,7 +709,7 @@ export class OrdersService {
       .then((result) => result.raw);
   }
 
-  private async createDeliveryInsertPedido(
+  private createDeliveryInsertPedido(
     manager: EntityManager,
     input: { id: string; id2: string; userId: string | undefined },
   ): Promise<CreateDeliveryInsertPedidoRow[]> {
@@ -765,7 +765,7 @@ export class OrdersService {
       .execute();
   }
 
-  private async createDeliveryInsertLiquidacion(
+  private createDeliveryInsertLiquidacion(
     manager: EntityManager,
     input: {
       id: string;

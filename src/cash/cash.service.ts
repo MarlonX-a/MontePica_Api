@@ -426,7 +426,7 @@ export class CashService {
     }
   }
 
-  private async getCashSummaryFindPago(
+  private getCashSummaryFindPago(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<GetCashSummaryFindPagoRow[]> {
@@ -453,7 +453,7 @@ export class CashService {
       .getRawMany<GetCashSummaryFindPagoRow>();
   }
 
-  private async getCashClosureFindCierreCaja(
+  private getCashClosureFindCierreCaja(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<GetCashClosureFindCierreCajaRow[]> {
@@ -479,7 +479,7 @@ export class CashService {
       .getRawMany<GetCashClosureFindCierreCajaRow>();
   }
 
-  private async getCashClosureFindCaja(
+  private getCashClosureFindCaja(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<GetCashClosureFindCajaRow[]> {
@@ -492,7 +492,7 @@ export class CashService {
       .getRawMany<GetCashClosureFindCajaRow>();
   }
 
-  private async getCashClosingPreviewFindCaja(
+  private getCashClosingPreviewFindCaja(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<GetCashClosingPreviewFindCajaRow[]> {
@@ -507,7 +507,7 @@ export class CashService {
       .getRawMany<GetCashClosingPreviewFindCajaRow>();
   }
 
-  private async closeCashFindCaja(
+  private closeCashFindCaja(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<CloseCashFindCajaRow[]> {
@@ -534,7 +534,7 @@ export class CashService {
       .getRawMany();
   }
 
-  private async closeCashFindCajaNext(
+  private closeCashFindCajaNext(
     manager: EntityManager,
     input: { cashRegisterId: string },
   ): Promise<CloseCashFindCajaNextRow[]> {
@@ -550,7 +550,7 @@ export class CashService {
       .getRawMany<CloseCashFindCajaNextRow>();
   }
 
-  private async closeCashInsertCierreCaja(
+  private closeCashInsertCierreCaja(
     manager: EntityManager,
     input: {
       cashRegisterId: string;
@@ -613,7 +613,7 @@ export class CashService {
     return row ? [row] : [];
   }
 
-  private async cashSnapshotFindPago(
+  private cashSnapshotFindPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CashSnapshotFindPagoRow[]> {
@@ -627,7 +627,7 @@ export class CashService {
       .getRawMany<CashSnapshotFindPagoRow>();
   }
 
-  private async pendingCashDayRefundsFindDevolucion(
+  private pendingCashDayRefundsFindDevolucion(
     manager: EntityManager,
     input: { dayId: string },
   ): Promise<PendingCashDayRefundsFindDevolucionRow[]> {
@@ -646,7 +646,7 @@ export class CashService {
       .getRawMany<PendingCashDayRefundsFindDevolucionRow>();
   }
 
-  private async getCashClosureWithFindCierreCaja(
+  private getCashClosureWithFindCierreCaja(
     manager: EntityManager,
     input: { id: string },
   ): Promise<GetCashClosureWithFindCierreCajaRow[]> {
@@ -672,7 +672,7 @@ export class CashService {
       .getRawMany<GetCashClosureWithFindCierreCajaRow>();
   }
 
-  private async openCashFindJornadaOperativa(
+  private openCashFindJornadaOperativa(
     manager: EntityManager,
     input: { timeZone: string },
   ): Promise<OpenCashFindJornadaOperativaRow[]> {
@@ -688,7 +688,7 @@ export class CashService {
       .getRawMany<OpenCashFindJornadaOperativaRow>();
   }
 
-  private async openCashInsertCaja(
+  private openCashInsertCaja(
     manager: EntityManager,
     input: { id: string; openingAmountCents: number; userId: string },
   ): Promise<OpenCashInsertCajaRow[]> {
@@ -711,7 +711,7 @@ export class CashService {
       .then((result) => result.raw);
   }
 
-  private async getSettingsWithFindConfiguracionOperativa(
+  private getSettingsWithFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<GetSettingsWithFindConfiguracionOperativaRow[]> {
     return manager

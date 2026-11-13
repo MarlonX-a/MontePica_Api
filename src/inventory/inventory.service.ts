@@ -432,7 +432,7 @@ export class InventoryService {
     return { before, after };
   }
 
-  private async idempotent<T>(
+  private idempotent<T>(
     operation: string,
     key: string | undefined,
     request: unknown,
@@ -492,7 +492,7 @@ export class InventoryService {
       const entries = Object.entries(value as Record<string, unknown>).sort(
         ([a], [b]) => a.localeCompare(b),
       );
-      return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${this.canonicalJson(item)}`).join(',')}}`;
+      return `{${entries.map(([key, item]) => JSON.stringify(key) + ':' + this.canonicalJson(item)).join(',')}}`;
     }
     return JSON.stringify(value);
   }
@@ -528,7 +528,7 @@ export class InventoryService {
     );
   }
 
-  private async getInventoryItemFindProducto(
+  private getInventoryItemFindProducto(
     manager: EntityManager,
     input: { dayId: string; productId: string },
   ): Promise<GetInventoryItemFindProductoRow[]> {
@@ -557,7 +557,7 @@ export class InventoryService {
       .getRawMany<GetInventoryItemFindProductoRow>();
   }
 
-  private async initializeFindProducto(
+  private initializeFindProducto(
     manager: EntityManager,
     input: { sortedIds: string[] },
   ): Promise<InitializeFindProductoRow[]> {
@@ -577,7 +577,7 @@ export class InventoryService {
       .getRawMany<InitializeFindProductoRow>();
   }
 
-  private async initializeFindInventarioDiario(
+  private initializeFindInventarioDiario(
     manager: EntityManager,
     input: { dayId: string; productId: string },
   ): Promise<InitializeFindInventarioDiarioRow[]> {
@@ -590,7 +590,7 @@ export class InventoryService {
       .getRawMany<InitializeFindInventarioDiarioRow>();
   }
 
-  private async initializeInsertInventarioDiario(
+  private initializeInsertInventarioDiario(
     manager: EntityManager,
     input: {
       dayId: string;
@@ -620,7 +620,7 @@ export class InventoryService {
       .then((result) => result.raw);
   }
 
-  private async initializeInsertMovimientoInventario(
+  private initializeInsertMovimientoInventario(
     manager: EntityManager,
     input: { inventoryId: string; userId: string; initialQuantity: number },
   ): Promise<InitializeInsertMovimientoInventarioRow[]> {
@@ -646,7 +646,7 @@ export class InventoryService {
       .then((result) => result.raw);
   }
 
-  private async assertOperatingDayExistsFindJornadaOperativa(
+  private assertOperatingDayExistsFindJornadaOperativa(
     manager: EntityManager,
     input: { dayId: string },
   ): Promise<AssertOperatingDayExistsFindJornadaOperativaRow[]> {
@@ -665,7 +665,7 @@ export class InventoryService {
     await this.locks.acquire(manager);
   }
 
-  private async lockCurrentOperatingDayFindConfiguracionOperativa(
+  private lockCurrentOperatingDayFindConfiguracionOperativa(
     manager: EntityManager,
   ): Promise<LockCurrentOperatingDayFindConfiguracionOperativaRow[]> {
     return manager
@@ -677,7 +677,7 @@ export class InventoryService {
       .getRawMany<LockCurrentOperatingDayFindConfiguracionOperativaRow>();
   }
 
-  private async lockCurrentOperatingDayFindOperationNext(
+  private lockCurrentOperatingDayFindOperationNext(
     manager: EntityManager,
     input: { timeZone: string },
   ): Promise<LockCurrentOperatingDayFindOperationNextRow[]> {
@@ -689,7 +689,7 @@ export class InventoryService {
       .getRawMany<LockCurrentOperatingDayFindOperationNextRow>();
   }
 
-  private async lockCurrentOperatingDayFindJornadaOperativa(
+  private lockCurrentOperatingDayFindJornadaOperativa(
     manager: EntityManager,
     input: { dayId: string },
   ): Promise<LockCurrentOperatingDayFindJornadaOperativaRow[]> {
@@ -707,7 +707,7 @@ export class InventoryService {
       .getRawMany<LockCurrentOperatingDayFindJornadaOperativaRow>();
   }
 
-  private async lockInventoryFindInventarioDiario(
+  private lockInventoryFindInventarioDiario(
     manager: EntityManager,
     input: { dayId: string; productId: string },
   ): Promise<LockInventoryFindInventarioDiarioRow[]> {
@@ -738,7 +738,7 @@ export class InventoryService {
       .execute();
   }
 
-  private async writeMovementInsertMovimientoInventario(
+  private writeMovementInsertMovimientoInventario(
     manager: EntityManager,
     input: {
       id: string;
@@ -779,7 +779,7 @@ export class InventoryService {
     await this.locks.acquireIdempotency(manager, [input.lockKey][0]);
   }
 
-  private async idempotentFindIdempotencia(
+  private idempotentFindIdempotencia(
     manager: EntityManager,
     input: { userId: string; operation: string; key: string },
   ): Promise<IdempotentFindIdempotenciaRow[]> {

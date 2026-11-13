@@ -121,7 +121,7 @@ export class TablesService {
     }
   }
 
-  private async createTableInsertMesa(
+  private createTableInsertMesa(
     manager: EntityManager,
     input: { normalizedCode: string },
   ): Promise<CreateTableInsertMesaRow[]> {
@@ -135,7 +135,7 @@ export class TablesService {
       .then((result) => result.raw);
   }
 
-  private async tablesFindMesa(
+  private tablesFindMesa(
     manager: EntityManager,
     input: { limit: number; offset: number },
   ): Promise<TablesFindMesaRow[]> {
@@ -160,7 +160,7 @@ export class TablesService {
       .getRawMany<TablesFindMesaRow>();
   }
 
-  private async tablesFindMesaNext(
+  private tablesFindMesaNext(
     manager: EntityManager,
   ): Promise<TablesFindMesaNextRow[]> {
     return manager
@@ -170,7 +170,7 @@ export class TablesService {
       .getRawMany<TablesFindMesaNextRow>();
   }
 
-  private async tableFindMesa(
+  private tableFindMesa(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TableFindMesaRow[]> {
@@ -193,7 +193,7 @@ export class TablesService {
       .getRawMany<TableFindMesaRow>();
   }
 
-  private async updateTableFindMesa(
+  private updateTableFindMesa(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UpdateTableFindMesaRow[]> {
@@ -207,7 +207,7 @@ export class TablesService {
       .getRawMany<UpdateTableFindMesaRow>();
   }
 
-  private async updateTableFindVisitaMesa(
+  private updateTableFindVisitaMesa(
     manager: EntityManager,
     input: { id: string },
   ): Promise<UpdateTableFindVisitaMesaRow[]> {

@@ -240,7 +240,7 @@ export class CatalogAdminService {
     }
   }
 
-  async setVisibility(
+  setVisibility(
     id: string,
     visible: boolean,
     actor: AuthenticatedRequestContext,
@@ -311,7 +311,7 @@ export class CatalogAdminService {
       throw new ConflictException(message);
   }
 
-  private async getCategoryFindCategoria(
+  private getCategoryFindCategoria(
     manager: EntityManager,
     input: { id: string },
   ): Promise<GetCategoryFindCategoriaRow[]> {
@@ -326,7 +326,7 @@ export class CatalogAdminService {
       .getRawMany<GetCategoryFindCategoriaRow>();
   }
 
-  private async createCategoryInsertCategoria(
+  private createCategoryInsertCategoria(
     manager: EntityManager,
     input: {
       normalized: string;
@@ -377,7 +377,7 @@ export class CatalogAdminService {
       .execute();
   }
 
-  private async getProductFindProducto(
+  private getProductFindProducto(
     manager: EntityManager,
     input: { id: string },
   ): Promise<GetProductFindProductoRow[]> {
@@ -393,7 +393,7 @@ export class CatalogAdminService {
       .getRawMany<GetProductFindProductoRow>();
   }
 
-  private async createProductFindCategoria(
+  private createProductFindCategoria(
     manager: EntityManager,
     input: { categoryId: string },
   ): Promise<CreateProductFindCategoriaRow[]> {
@@ -406,7 +406,7 @@ export class CatalogAdminService {
       .getRawMany<CreateProductFindCategoriaRow>();
   }
 
-  private async createProductInsertProducto(
+  private createProductInsertProducto(
     manager: EntityManager,
     input: {
       categoryId: string;
@@ -493,7 +493,7 @@ export class CatalogAdminService {
       .execute();
   }
 
-  private async getCategoryWithFindCategoria(
+  private getCategoryWithFindCategoria(
     manager: EntityManager,
     input: { id: string },
   ): Promise<GetCategoryWithFindCategoriaRow[]> {

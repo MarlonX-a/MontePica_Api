@@ -281,7 +281,7 @@ export class SettlementsService {
       : [];
   }
 
-  private async settlementFindPago(
+  private settlementFindPago(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<SettlementFindPagoRow[]> {
@@ -314,7 +314,7 @@ export class SettlementsService {
       .getRawMany<SettlementFindPagoRow>();
   }
 
-  private async settlementFindDetalleLiquidacion(
+  private settlementFindDetalleLiquidacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<SettlementFindDetalleLiquidacionRow[]> {
@@ -340,7 +340,7 @@ export class SettlementsService {
       .getRawMany<SettlementFindDetalleLiquidacionRow>();
   }
 
-  private async createFindJornadaOperativa(
+  private createFindJornadaOperativa(
     manager: EntityManager,
     input: { zone: string },
   ): Promise<CreateFindJornadaOperativaRow[]> {
@@ -357,7 +357,7 @@ export class SettlementsService {
       .getRawMany<CreateFindJornadaOperativaRow>();
   }
 
-  private async createFindCuentaConsumo(
+  private createFindCuentaConsumo(
     manager: EntityManager,
     input: { accountId: string },
   ): Promise<CreateFindCuentaConsumoRow[]> {
@@ -371,7 +371,7 @@ export class SettlementsService {
       .getRawMany<CreateFindCuentaConsumoRow>();
   }
 
-  private async createFindLiquidacion(
+  private createFindLiquidacion(
     manager: EntityManager,
     input: { accountId: string },
   ): Promise<CreateFindLiquidacionRow[]> {
@@ -384,7 +384,7 @@ export class SettlementsService {
       .getRawMany<CreateFindLiquidacionRow>();
   }
 
-  private async createFindSolicitudCancelacion(
+  private createFindSolicitudCancelacion(
     manager: EntityManager,
     input: { accountId: string },
   ): Promise<CreateFindSolicitudCancelacionRow[]> {
@@ -399,7 +399,7 @@ export class SettlementsService {
       .getRawMany<CreateFindSolicitudCancelacionRow>();
   }
 
-  private async createFindPedido(
+  private createFindPedido(
     manager: EntityManager,
     input: { accountId: string },
   ): Promise<CreateFindPedidoRow[]> {
@@ -413,7 +413,7 @@ export class SettlementsService {
       .getRawMany<CreateFindPedidoRow>();
   }
 
-  private async createFindAsignacionConsumo(
+  private createFindAsignacionConsumo(
     manager: EntityManager,
     input: { accountId: string },
   ): Promise<CreateFindAsignacionConsumoRow[]> {
@@ -433,7 +433,7 @@ export class SettlementsService {
       .getRawMany<CreateFindAsignacionConsumoRow>();
   }
 
-  private async createInsertLiquidacion(
+  private createInsertLiquidacion(
     manager: EntityManager,
     input: { accountId: string; cash: string; total: number; userId: string },
   ): Promise<CreateInsertLiquidacionRow[]> {
@@ -481,7 +481,7 @@ export class SettlementsService {
       .execute();
   }
 
-  private async cancelFindLiquidacion(
+  private cancelFindLiquidacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CancelFindLiquidacionRow[]> {
@@ -494,7 +494,7 @@ export class SettlementsService {
       .getRawMany<CancelFindLiquidacionRow>();
   }
 
-  private async cancelFindCuentaConsumo(
+  private cancelFindCuentaConsumo(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<CancelFindCuentaConsumoRow[]> {
@@ -508,7 +508,7 @@ export class SettlementsService {
       .getRawMany<CancelFindCuentaConsumoRow>();
   }
 
-  private async cancelFindLiquidacionNext(
+  private cancelFindLiquidacionNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CancelFindLiquidacionNextRow[]> {
@@ -522,7 +522,7 @@ export class SettlementsService {
       .getRawMany<CancelFindLiquidacionNextRow>();
   }
 
-  private async cancelFindPago(
+  private cancelFindPago(
     manager: EntityManager,
     input: { id: string },
   ): Promise<CancelFindPagoRow[]> {

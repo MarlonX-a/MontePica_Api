@@ -368,7 +368,7 @@ export class DeliveryService {
       : [];
   }
 
-  private async settingsFindConfigDomicilio(
+  private settingsFindConfigDomicilio(
     manager: EntityManager,
   ): Promise<SettingsFindConfigDomicilioRow[]> {
     return manager
@@ -382,7 +382,7 @@ export class DeliveryService {
       .getRawMany<SettingsFindConfigDomicilioRow>();
   }
 
-  private async updateSettingsInsertConfigDomicilio(
+  private updateSettingsInsertConfigDomicilio(
     manager: EntityManager,
     input: {
       version: number;
@@ -412,7 +412,7 @@ export class DeliveryService {
       .then((result) => result.raw);
   }
 
-  private async activeDayFindJornadaOperativa(
+  private activeDayFindJornadaOperativa(
     manager: EntityManager,
     input: { zone: string },
   ): Promise<ActiveDayFindJornadaOperativaRow[]> {
@@ -428,7 +428,7 @@ export class DeliveryService {
       .getRawMany<ActiveDayFindJornadaOperativaRow>();
   }
 
-  private async detailFindConfigDomicilio(
+  private detailFindConfigDomicilio(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<DetailFindConfigDomicilioRow[]> {
@@ -466,7 +466,7 @@ export class DeliveryService {
       .getRawMany<DetailFindConfigDomicilioRow>();
   }
 
-  private async createInsertSolicitudDomicilio(
+  private createInsertSolicitudDomicilio(
     manager: EntityManager,
     input: {
       clientId: string;
@@ -504,7 +504,7 @@ export class DeliveryService {
       .then((result) => result.raw);
   }
 
-  private async transitionFindSolicitudDomicilio(
+  private transitionFindSolicitudDomicilio(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TransitionFindSolicitudDomicilioRow[]> {
@@ -519,7 +519,7 @@ export class DeliveryService {
       .getRawMany<TransitionFindSolicitudDomicilioRow>();
   }
 
-  private async transitionFindEntregaDomicilio(
+  private transitionFindEntregaDomicilio(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TransitionFindEntregaDomicilioRow[]> {

@@ -13,7 +13,7 @@ export class TableAccessService {
     private readonly operationalContext: OperationalContextService,
   ) {}
 
-  async resolveQr(token: string) {
+  resolveQr(token: string) {
     return this.db.transaction(async (manager) => {
       const timeZone =
         await this.operationalContext.lockTableOperations(manager);
@@ -38,7 +38,7 @@ export class TableAccessService {
     });
   }
 
-  private async resolveQrFindMesa(
+  private resolveQrFindMesa(
     manager: EntityManager,
     input: { hash: string },
   ): Promise<ResolveQrFindMesaRow[]> {

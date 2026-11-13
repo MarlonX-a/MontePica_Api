@@ -30,7 +30,7 @@ export class GuestSessionsService {
     private readonly auditLog: AuditService,
   ) {}
 
-  async create(dto: CreateGuestSessionDto) {
+  create(dto: CreateGuestSessionDto) {
     const token = `guest_${randomBytes(32).toString('base64url')}`;
     return this.db.transaction(async (manager) => {
       const [client] = await this.createInsertCliente(manager, {
@@ -88,7 +88,7 @@ export class GuestSessionsService {
     });
   }
 
-  private async createInsertCliente(
+  private createInsertCliente(
     manager: EntityManager,
     input: { name: string; phone: string | null },
   ): Promise<CreateInsertClienteRow[]> {
@@ -104,7 +104,7 @@ export class GuestSessionsService {
       .then((result) => result.raw);
   }
 
-  private async createInsertSesionCliente(
+  private createInsertSesionCliente(
     manager: EntityManager,
     input: { id: string; token: string },
   ): Promise<CreateInsertSesionClienteRow[]> {
@@ -124,7 +124,7 @@ export class GuestSessionsService {
       .then((result) => result.raw);
   }
 
-  private async authenticateFindSesionCliente(
+  private authenticateFindSesionCliente(
     manager: EntityManager,
     input: { token: string },
   ): Promise<AuthenticateFindSesionClienteRow[]> {

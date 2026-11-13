@@ -275,7 +275,7 @@ export class OrdersLifecycleService {
     return this.queries.detail(id, clientId, history, m);
   }
 
-  private async editFindPedido(
+  private editFindPedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<EditFindPedidoRow[]> {
@@ -304,7 +304,7 @@ export class OrdersLifecycleService {
       .execute();
   }
 
-  private async transitionFindUsuario(
+  private transitionFindUsuario(
     manager: EntityManager,
     input: { userId: string | undefined; sessionId: string | undefined },
   ): Promise<TransitionFindUsuarioRow[]> {
@@ -334,7 +334,7 @@ export class OrdersLifecycleService {
       : [];
   }
 
-  private async transitionFindPedidoNext(
+  private transitionFindPedidoNext(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TransitionFindPedidoNextRow[]> {
@@ -355,7 +355,7 @@ export class OrdersLifecycleService {
       .getRawMany<TransitionFindPedidoNextRow>();
   }
 
-  private async transitionFindCuentaConsumo(
+  private transitionFindCuentaConsumo(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<TransitionFindCuentaConsumoRow[]> {
@@ -369,7 +369,7 @@ export class OrdersLifecycleService {
       .getRawMany<TransitionFindCuentaConsumoRow>();
   }
 
-  private async transitionFindJornadaOperativa(
+  private transitionFindJornadaOperativa(
     manager: EntityManager,
     input: { id_jornada: string; zone: string },
   ): Promise<TransitionFindJornadaOperativaRow[]> {
@@ -385,7 +385,7 @@ export class OrdersLifecycleService {
       .getRawMany<TransitionFindJornadaOperativaRow>();
   }
 
-  private async transitionFindLiquidacion(
+  private transitionFindLiquidacion(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<TransitionFindLiquidacionRow[]> {
@@ -401,7 +401,7 @@ export class OrdersLifecycleService {
       .getRawMany<TransitionFindLiquidacionRow>();
   }
 
-  private async transitionFindPago(
+  private transitionFindPago(
     manager: EntityManager,
     input: { id_cuenta: string },
   ): Promise<TransitionFindPagoRow[]> {
@@ -456,7 +456,7 @@ export class OrdersLifecycleService {
       .execute();
   }
 
-  private async transitionFindSolicitudCancelacion(
+  private transitionFindSolicitudCancelacion(
     manager: EntityManager,
     input: { id: string },
   ): Promise<TransitionFindSolicitudCancelacionRow[]> {

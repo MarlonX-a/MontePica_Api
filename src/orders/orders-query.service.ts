@@ -95,7 +95,7 @@ export class OrdersQueryService {
     return { items, total, page: query.page, limit: query.limit };
   }
 
-  private async detailFindPedido(
+  private detailFindPedido(
     manager: EntityManager,
     input: { id: string; clientId: string | null },
   ): Promise<DetailFindPedidoRow[]> {
@@ -136,7 +136,7 @@ export class OrdersQueryService {
       .getRawMany<DetailFindPedidoRow>();
   }
 
-  private async detailFindEntregaDomicilio(
+  private detailFindEntregaDomicilio(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DetailFindEntregaDomicilioRow[]> {
@@ -164,7 +164,7 @@ export class OrdersQueryService {
       .getRawMany<DetailFindEntregaDomicilioRow>();
   }
 
-  private async detailFindLiquidacion(
+  private detailFindLiquidacion(
     manager: EntityManager,
     input: { accountId: string },
   ): Promise<DetailFindLiquidacionRow[]> {
@@ -179,7 +179,7 @@ export class OrdersQueryService {
       .getRawMany<DetailFindLiquidacionRow>();
   }
 
-  private async detailFindDetallePedido(
+  private detailFindDetallePedido(
     manager: EntityManager,
     input: { versionId: string },
   ): Promise<DetailFindDetallePedidoRow[]> {
@@ -201,7 +201,7 @@ export class OrdersQueryService {
       .getRawMany<DetailFindDetallePedidoRow>();
   }
 
-  private async detailFindHistorialPedido(
+  private detailFindHistorialPedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<DetailFindHistorialPedidoRow[]> {
@@ -225,7 +225,7 @@ export class OrdersQueryService {
       .getRawMany<DetailFindHistorialPedidoRow>();
   }
 
-  private async historyFindVersionPedido(
+  private historyFindVersionPedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<HistoryFindVersionPedidoRow[]> {
@@ -246,7 +246,7 @@ export class OrdersQueryService {
       .getRawMany<HistoryFindVersionPedidoRow>();
   }
 
-  private async historyFindDetallePedido(
+  private historyFindDetallePedido(
     manager: EntityManager,
     input: { id: string },
   ): Promise<HistoryFindDetallePedidoRow[]> {
