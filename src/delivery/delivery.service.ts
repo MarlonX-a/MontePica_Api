@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   BadRequestException,
   ConflictException,
@@ -71,28 +72,30 @@ export class DeliveryService {
       dto,
       200,
       'config_domicilio',
-      (m) => this.staff(m, actor, 'delivery.configure'),
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const before = await this.settings(m);
-        const [row] = await this.updateSettingsInsertConfigDomicilio(m, {
-          version: before.version + 1,
-          enabled: dto.enabled,
-          coverageDescription: dto.coverageDescription,
-          shippingFeeCents: dto.shippingFeeCents,
-          userId: actor.userId,
-          receiptSubmissionSeconds: dto.receiptSubmissionSeconds,
-        });
-        const response = await this.settings(m);
-        await this.auditLog.append(
-          m,
-          { userId: actor.userId },
-          'config_domicilio',
-          row.id,
-          'delivery.settings_updated',
-          { before, after: response },
-        );
-        return { resourceId: row.id, response };
+      {
+        authorize: (m) => this.staff(m, actor, 'delivery.configure'),
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const before = await this.settings(m);
+          const [row] = await this.updateSettingsInsertConfigDomicilio(m, {
+            version: before.version + 1,
+            enabled: dto.enabled,
+            coverageDescription: dto.coverageDescription,
+            shippingFeeCents: dto.shippingFeeCents,
+            userId: actor.userId,
+            receiptSubmissionSeconds: dto.receiptSubmissionSeconds,
+          });
+          const response = await this.settings(m);
+          await this.auditLog.append(
+            m,
+            { userId: actor.userId },
+            'config_domicilio',
+            row.id,
+            'delivery.settings_updated',
+            { before, after: response },
+          );
+          return { resourceId: row.id, response };
+        },
       },
     );
   }
@@ -148,41 +151,46 @@ export class DeliveryService {
       dto,
       201,
       'solicitud_domicilio',
-      (m) => this.participants.authenticate(m, client),
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const settings = await this.settings(m);
-        const day = await this.activeDay(m, zone);
-        if (!settings.enabled || settings.version !== dto.configurationVersion)
-          throw new ConflictException(
-            'Configuración de domicilio deshabilitada o desactualizada.',
-          );
-        const [row] = await this.createInsertSolicitudDomicilio(m, {
-          clientId: client.clientId,
-          day,
-          id: settings.id,
-          recipientName: dto.recipientName,
-          phone: dto.phone,
-          address: dto.address,
-          references: dto.references ?? null,
-          latitude: dto.latitude ?? null,
-          longitude: dto.longitude ?? null,
-          shippingFeeCents: settings.shippingFeeCents,
-        });
-        const response = await this.detail(row.id, client.clientId, m);
-        await this.auditLog.append(
-          m,
-          { userId: client.userId },
-          'solicitud_domicilio',
-          row.id,
-          'delivery.requested',
-          {
+      {
+        authorize: (m) => this.participants.authenticate(m, client),
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const settings = await this.settings(m);
+          const day = await this.activeDay(m, zone);
+          if (
+            !settings.enabled ||
+            settings.version !== dto.configurationVersion
+          )
+            throw new ConflictException(
+              'Configuración de domicilio deshabilitada o desactualizada.',
+            );
+          const [row] = await this.createInsertSolicitudDomicilio(m, {
             clientId: client.clientId,
-            configurationVersion: settings.version,
+            day,
+            id: settings.id,
+            recipientName: dto.recipientName,
+            phone: dto.phone,
+            address: dto.address,
+            references: dto.references ?? null,
+            latitude: dto.latitude ?? null,
+            longitude: dto.longitude ?? null,
             shippingFeeCents: settings.shippingFeeCents,
-          },
-        );
-        return { resourceId: row.id, response };
+          });
+          const response = await this.detail(row.id, client.clientId, m);
+          await this.auditLog.append(
+            m,
+            { userId: client.userId },
+            'solicitud_domicilio',
+            row.id,
+            'delivery.requested',
+            {
+              clientId: client.clientId,
+              configurationVersion: settings.version,
+              shippingFeeCents: settings.shippingFeeCents,
+            },
+          );
+          return { resourceId: row.id, response };
+        },
       },
     );
   }
@@ -202,65 +210,71 @@ export class DeliveryService {
       { reason: reason ?? null },
       200,
       'solicitud_domicilio',
-      async (m) => {
-        if (client) {
-          await this.participants.authenticate(m, client);
-          await this.detail(id, client.clientId, m);
-        } else await this.staff(m, actor, 'delivery.review');
-      },
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const settings = await this.settings(m);
-        const day = action === 'approve' ? await this.activeDay(m, zone) : null;
-        const [row] = await this.transitionFindSolicitudDomicilio(m, {
-          id,
-        });
-        if (!row)
-          throw new NotFoundException('Solicitud de domicilio no encontrada.');
-        const [used] = await this.transitionFindEntregaDomicilio(m, { id });
-        if (used)
-          throw new ConflictException(
-            'La solicitud ya está vinculada a un pedido.',
+      {
+        authorize: async (m) => {
+          if (client) {
+            await this.participants.authenticate(m, client);
+            await this.detail(id, client.clientId, m);
+          } else await this.staff(m, actor, 'delivery.review');
+        },
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const settings = await this.settings(m);
+          const day =
+            action === 'approve' ? await this.activeDay(m, zone) : null;
+          const [row] = await this.transitionFindSolicitudDomicilio(m, {
+            id,
+          });
+          if (!row)
+            throw new NotFoundException(
+              'Solicitud de domicilio no encontrada.',
+            );
+          const [used] = await this.transitionFindEntregaDomicilio(m, { id });
+          if (used)
+            throw new ConflictException(
+              'La solicitud ya está vinculada a un pedido.',
+            );
+          if (
+            action === 'cancel'
+              ? !['pending', 'approved'].includes(row.estado)
+              : row.estado !== 'pending'
+          )
+            throw new ConflictException(
+              'La solicitud no permite esa transición.',
+            );
+          if (
+            action === 'approve' &&
+            (!settings.enabled ||
+              settings.version !== row.version ||
+              day !== row.id_jornada)
+          )
+            throw new ConflictException(
+              'La solicitud pertenece a otra jornada o configuración.',
+            );
+          const status = (
+            {
+              approve: 'approved',
+              reject: 'rejected',
+              cancel: 'cancelled',
+            } as const
+          )[action];
+          await this.transitionUpdateSolicitudDomicilio(m, {
+            id,
+            status,
+            userId: actor.userId,
+            reason: reason ?? null,
+          });
+          const response = await this.detail(id, client?.clientId, m);
+          await this.auditLog.append(
+            m,
+            { userId: actor.userId },
+            'solicitud_domicilio',
+            id,
+            `delivery.${action}`,
+            { before: row.estado, after: status, reason: reason ?? null },
           );
-        if (
-          action === 'cancel'
-            ? !['pending', 'approved'].includes(row.estado)
-            : row.estado !== 'pending'
-        )
-          throw new ConflictException(
-            'La solicitud no permite esa transición.',
-          );
-        if (
-          action === 'approve' &&
-          (!settings.enabled ||
-            settings.version !== row.version ||
-            day !== row.id_jornada)
-        )
-          throw new ConflictException(
-            'La solicitud pertenece a otra jornada o configuración.',
-          );
-        const status =
-          action === 'approve'
-            ? 'approved'
-            : action === 'reject'
-              ? 'rejected'
-              : 'cancelled';
-        await this.transitionUpdateSolicitudDomicilio(m, {
-          id,
-          status,
-          userId: actor.userId,
-          reason: reason ?? null,
-        });
-        const response = await this.detail(id, client?.clientId, m);
-        await this.auditLog.append(
-          m,
-          { userId: actor.userId },
-          'solicitud_domicilio',
-          id,
-          `delivery.${action}`,
-          { before: row.estado, after: status, reason: reason ?? null },
-        );
-        return { resourceId: id, response };
+          return { resourceId: id, response };
+        },
       },
     );
   }
@@ -275,7 +289,7 @@ export class DeliveryService {
       dayId,
       actor.userId,
     );
-    for (const row of rows) {
+    await forEachSequential(rows, async (row) => {
       await this.auditLog.append(
         manager,
         { userId: actor.userId },
@@ -289,7 +303,7 @@ export class DeliveryService {
           after: 'cancelled',
         },
       );
-    }
+    });
     return rows.length;
   }
 

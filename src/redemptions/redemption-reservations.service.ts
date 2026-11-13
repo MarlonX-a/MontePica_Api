@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import { ConflictException, Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { AuditService } from '../common/audit/audit.service.js';
@@ -64,7 +65,7 @@ export class RedemptionReservationsService {
     const rows = await this.releaseForParticipantFindSolicitudCanje(m, {
       participantId,
     });
-    for (const r of rows) {
+    await forEachSequential(rows, async (r) => {
       await this.release(m, r.id, 'cancelled');
       await this.history(m, r.id, undefined, 'redemption.participant_left');
       await this.auditLog.append(
@@ -75,14 +76,14 @@ export class RedemptionReservationsService {
         'redemption.participant_left',
         {},
       );
-    }
+    });
   }
 
   async releaseForVisit(m: EntityManager, visitId: string) {
     const rows = await this.releaseForVisitFindSolicitudCanje(m, {
       visitId,
     });
-    for (const r of rows) {
+    await forEachSequential(rows, async (r) => {
       await this.release(m, r.id, 'cancelled');
       await this.history(m, r.id, undefined, 'redemption.visit_closed');
       await this.auditLog.append(
@@ -93,7 +94,7 @@ export class RedemptionReservationsService {
         'redemption.visit_closed',
         {},
       );
-    }
+    });
   }
 
   async releaseForOperatingDay(
@@ -106,20 +107,20 @@ export class RedemptionReservationsService {
     const rows = await this.releaseForOperatingDayFindSolicitudCanje(m, {
       dayId,
     });
-    for (const r of rows) {
+    await forEachSequential(rows, async (r) => {
       await this.release(m, r.id, 'cancelled');
       await this.history(m, r.id, undefined, event);
       await this.auditLog.append(m, {}, 'solicitud_canje', r.id, event, {
         operatingDayId: dayId,
       });
-    }
+    });
   }
 
   async refundForOrder(m: EntityManager, orderId: string, actor: Actor) {
     const [r] = await this.refundForOrderFindSolicitudCanje(m, {
       orderId,
     });
-    if (!r || r.estado !== 'approved') return;
+    if (r?.estado !== 'approved') return;
     await this.requestFindCliente(m, { clientId: r.client });
     const [inserted] = await this.refundForOrderInsertMovimientoPuntos(m, {
       client: r.client,

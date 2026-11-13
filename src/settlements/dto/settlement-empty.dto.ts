@@ -1,1 +1,3 @@
-export class SettlementEmptyDto {}
+export class SettlementEmptyDto {
+  // An empty request body is required; global whitelist validation rejects every supplied field.
+}

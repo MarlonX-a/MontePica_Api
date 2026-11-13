@@ -75,39 +75,42 @@ export class RewardsService {
       dto,
       201,
       'recompensa',
-      (m) => this.staff(m, actor, 'rewards.manage').then(() => undefined),
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const [product] = await this.createRewardFindProducto(m, {
-          productId: dto.productId,
-        });
-        if (!product) throw new NotFoundException('Producto no encontrado.');
-        const [row] = await this.createRewardInsertRecompensa(m, {
-          name: dto.name,
-          description: dto.description ?? null,
-          productId: dto.productId,
-          pointsCost: dto.pointsCost,
-          active: dto.active,
-          sortOrder: dto.sortOrder,
-        });
-        await this.auditLog.append(
-          m,
-          this.user(actor),
-          'recompensa',
-          row.id,
-          'reward.created',
-          {
+      {
+        authorize: (m) =>
+          this.staff(m, actor, 'rewards.manage').then(() => undefined),
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const [product] = await this.createRewardFindProducto(m, {
+            productId: dto.productId,
+          });
+          if (!product) throw new NotFoundException('Producto no encontrado.');
+          const [row] = await this.createRewardInsertRecompensa(m, {
             name: dto.name,
+            description: dto.description ?? null,
             productId: dto.productId,
             pointsCost: dto.pointsCost,
             active: dto.active,
             sortOrder: dto.sortOrder,
-          },
-        );
-        return {
-          resourceId: row.id,
-          response: await this.reward(row.id, true, m),
-        };
+          });
+          await this.auditLog.append(
+            m,
+            this.user(actor),
+            'recompensa',
+            row.id,
+            'reward.created',
+            {
+              name: dto.name,
+              productId: dto.productId,
+              pointsCost: dto.pointsCost,
+              active: dto.active,
+              sortOrder: dto.sortOrder,
+            },
+          );
+          return {
+            resourceId: row.id,
+            response: await this.reward(row.id, true, m),
+          };
+        },
       },
     );
   }
@@ -132,46 +135,49 @@ export class RewardsService {
       dto,
       200,
       'recompensa',
-      (m) => this.staff(m, actor, 'rewards.manage').then(() => undefined),
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const [old] = await this.updateRewardFindRecompensa(m, {
-          id,
-        });
-        if (!old) throw new NotFoundException('Recompensa no encontrada.');
-        if (old.version !== dto.expectedVersion)
-          throw new ConflictException('La versión de la recompensa cambió.');
-        const updatedRows = await this.updateRewardUpdateRecompensa(m, {
-          id,
-          name: dto.name,
-          description: dto.description !== undefined,
-          description4: dto.description ?? null,
-          pointsCost: dto.pointsCost,
-          active: dto.active,
-          sortOrder: dto.sortOrder,
-        });
-        await this.auditLog.append(
-          m,
-          this.user(actor),
-          'recompensa',
-          id,
-          'reward.updated',
-          {
-            before: {
-              name: old.nombre,
-              description: old.descripcion,
-              pointsCost: Number(old.costo_puntos),
-              active: old.activa,
-              sortOrder: old.orden,
-              version: old.version,
+      {
+        authorize: (m) =>
+          this.staff(m, actor, 'rewards.manage').then(() => undefined),
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const [old] = await this.updateRewardFindRecompensa(m, {
+            id,
+          });
+          if (!old) throw new NotFoundException('Recompensa no encontrada.');
+          if (old.version !== dto.expectedVersion)
+            throw new ConflictException('La versión de la recompensa cambió.');
+          const updatedRows = await this.updateRewardUpdateRecompensa(m, {
+            id,
+            name: dto.name,
+            description: dto.description !== undefined,
+            description4: dto.description ?? null,
+            pointsCost: dto.pointsCost,
+            active: dto.active,
+            sortOrder: dto.sortOrder,
+          });
+          await this.auditLog.append(
+            m,
+            this.user(actor),
+            'recompensa',
+            id,
+            'reward.updated',
+            {
+              before: {
+                name: old.nombre,
+                description: old.descripcion,
+                pointsCost: Number(old.costo_puntos),
+                active: old.activa,
+                sortOrder: old.orden,
+                version: old.version,
+              },
+              after: changes,
             },
-            after: changes,
-          },
-        );
-        return {
-          resourceId: updatedRows[0].id,
-          response: await this.reward(id, true, m),
-        };
+          );
+          return {
+            resourceId: updatedRows[0].id,
+            response: await this.reward(id, true, m),
+          };
+        },
       },
     );
   }

@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import 'dotenv/config';
 import 'reflect-metadata';
 import { DataSource, type EntityManager } from 'typeorm';
@@ -66,10 +67,12 @@ async function seedCatalog(
   manager: EntityManager,
   service: CatalogSeedService,
 ): Promise<void> {
-  for (const category of categories)
+  await forEachSequential(categories, async (category) => {
     await service.insertCategoryIfMissing(manager, category);
-  for (const product of products)
+  });
+  await forEachSequential(products, async (product) => {
     await service.insertProductIfMissing(manager, product);
+  });
 }
 
 try {

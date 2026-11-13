@@ -109,93 +109,101 @@ export class RefundsService {
         dto,
         200,
         'devolucion',
-        (m) => this.staff(m, actor, 'refunds.execute', true),
-        async (m) => {
-          await this.operationalContext.lockTableOperations(m);
-          const [refund] = await this.executeRefundFindDevolucion(m, {
-            id,
-          });
-          if (!refund) throw new NotFoundException('Devolucion no encontrada.');
-          if (
-            refund.estado !== 'pending' ||
-            refund.cancellationStatus !== 'approved' ||
-            refund.paymentStatus !== 'confirmed'
-          )
-            throw new ConflictException(
-              'La devolucion ya no puede ejecutarse.',
-            );
-          if (
-            !Number.isSafeInteger(refund.amount) ||
-            refund.amount <= 0 ||
-            !Number.isSafeInteger(refund.paidAmount) ||
-            refund.amount > refund.paidAmount
-          )
-            throw new ConflictException(
-              'El importe autorizado supera el pago confirmado.',
-            );
-
-          let cashRegisterId: string | null = null;
-          if (dto.method === 'cash') {
-            const [day] = await this.executeRefundFindConfiguracionOperativa(m);
-            if (!day || day.dayStatus !== 'open' || day.cashStatus !== 'open')
-              throw new ConflictException(
-                'Se requiere jornada y caja actuales abiertas para devolver en efectivo.',
-              );
-            cashRegisterId = day.cashRegisterId;
-            const [totals] = await this.executeRefundFindPago(m, {
-              cashRegisterId,
-            });
-            const balance =
-              BigInt(day.opening) +
-              BigInt(totals.income) -
-              BigInt(totals.refunds);
-            if (balance < BigInt(refund.amount))
-              throw new ConflictException(
-                'La caja no tiene saldo suficiente para esta devolucion.',
-              );
-          }
-
-          const [updated] = await this.executeRefundUpdateDevolucion(m, {
-            id,
-            method: dto.method,
-            userId: actor.userId,
-            bankOperationReference: dto.bankOperationReference ?? null,
-            recipientName: dto.recipientName ?? null,
-            notes: dto.notes ?? null,
-            cashRegisterId,
-          });
-          if (dto.method === 'cash')
-            await this.executeRefundInsertSalidaCajaDevolucion(m, {
+        {
+          authorize: (m) => this.staff(m, actor, 'refunds.execute', true),
+          action: async (m) => {
+            await this.operationalContext.lockTableOperations(m);
+            const [refund] = await this.executeRefundFindDevolucion(m, {
               id,
-              cashRegisterId,
-              amount: refund.amount,
-              userId: actor.userId,
             });
-          await this.executeRefundInsertHistorialDevolucion(m, {
-            id,
-            userId: actor.userId,
-            detailJson: JSON.stringify({
+            if (!refund)
+              throw new NotFoundException('Devolucion no encontrada.');
+            if (
+              refund.estado !== 'pending' ||
+              refund.cancellationStatus !== 'approved' ||
+              refund.paymentStatus !== 'confirmed'
+            )
+              throw new ConflictException(
+                'La devolucion ya no puede ejecutarse.',
+              );
+            if (
+              !Number.isSafeInteger(refund.amount) ||
+              refund.amount <= 0 ||
+              !Number.isSafeInteger(refund.paidAmount) ||
+              refund.amount > refund.paidAmount
+            )
+              throw new ConflictException(
+                'El importe autorizado supera el pago confirmado.',
+              );
+
+            let cashRegisterId: string | null = null;
+            if (dto.method === 'cash') {
+              const [day] =
+                await this.executeRefundFindConfiguracionOperativa(m);
+              if (day?.dayStatus !== 'open' || day.cashStatus !== 'open')
+                throw new ConflictException(
+                  'Se requiere jornada y caja actuales abiertas para devolver en efectivo.',
+                );
+              cashRegisterId = day.cashRegisterId;
+              const [totals] = await this.executeRefundFindPago(m, {
+                cashRegisterId,
+              });
+              const balance =
+                BigInt(day.opening) +
+                BigInt(totals.income) -
+                BigInt(totals.refunds);
+              if (balance < BigInt(refund.amount))
+                throw new ConflictException(
+                  'La caja no tiene saldo suficiente para esta devolucion.',
+                );
+            }
+
+            const [updated] = await this.executeRefundUpdateDevolucion(m, {
+              id,
               method: dto.method,
-              amountCents: refund.amount,
-              cashRegisterId,
+              userId: actor.userId,
               bankOperationReference: dto.bankOperationReference ?? null,
               recipientName: dto.recipientName ?? null,
               notes: dto.notes ?? null,
-            }),
-          });
-          await this.points.refund(m, id, actor.userId);
-          await this.auditLog.append(
-            m,
-            { userId: actor.userId },
-            'devolucion',
-            id,
-            'refund.completed',
-            { method: dto.method, amountCents: refund.amount, cashRegisterId },
-          );
-          return {
-            resourceId: updated.id_devolucion,
-            response: await this.refund(id, undefined, true, m),
-          };
+              cashRegisterId,
+            });
+            if (dto.method === 'cash')
+              await this.executeRefundInsertSalidaCajaDevolucion(m, {
+                id,
+                cashRegisterId,
+                amount: refund.amount,
+                userId: actor.userId,
+              });
+            await this.executeRefundInsertHistorialDevolucion(m, {
+              id,
+              userId: actor.userId,
+              detailJson: JSON.stringify({
+                method: dto.method,
+                amountCents: refund.amount,
+                cashRegisterId,
+                bankOperationReference: dto.bankOperationReference ?? null,
+                recipientName: dto.recipientName ?? null,
+                notes: dto.notes ?? null,
+              }),
+            });
+            await this.points.refund(m, id, actor.userId);
+            await this.auditLog.append(
+              m,
+              { userId: actor.userId },
+              'devolucion',
+              id,
+              'refund.completed',
+              {
+                method: dto.method,
+                amountCents: refund.amount,
+                cashRegisterId,
+              },
+            );
+            return {
+              resourceId: updated.id_devolucion,
+              response: await this.refund(id, undefined, true, m),
+            };
+          },
         },
       );
     } catch (error) {

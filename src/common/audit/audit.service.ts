@@ -14,6 +14,9 @@ export class AuditService {
     detail: unknown,
     systemActorType: 'system' | 'sistema' = 'system',
   ): Promise<void> {
+    let actorType: string = systemActorType;
+    if (actor.userId) actorType = 'usuario';
+    if (actor.guestSessionId) actorType = 'sesion_cliente';
     await manager
       .getRepository(AuditEntry)
       .createQueryBuilder()
@@ -22,11 +25,7 @@ export class AuditService {
         {
           actor_usuario_id: actor.userId ?? null,
           actor_sesion_cliente_id: actor.guestSessionId ?? null,
-          actor_tipo: actor.guestSessionId
-            ? 'sesion_cliente'
-            : actor.userId
-              ? 'usuario'
-              : systemActorType,
+          actor_tipo: actorType,
           recurso_tipo: resource,
           recurso_id: resourceId,
           evento: event,

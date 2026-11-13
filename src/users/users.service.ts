@@ -152,12 +152,7 @@ export class UsersService {
           throw new BadRequestException('El rol solicitado no existe.');
         const email =
           dto.email === undefined ? current.email : normalizeEmail(dto.email);
-        const phone =
-          dto.phone === undefined
-            ? current.phone
-            : dto.phone === null
-              ? null
-              : normalizePhone(dto.phone);
+        const phone = this.updatedPhone(dto.phone, current.phone);
         const name =
           dto.name === undefined ? current.name : cleanName(dto.name);
         const sensitive =
@@ -577,5 +572,13 @@ export class UsersService {
       .setParameters(queryParameters2)
       .getRawMany();
     return { items, total: count[0].total, page, limit };
+  }
+  private updatedPhone(
+    value: string | null | undefined,
+    current: string | null,
+  ): string | null {
+    if (value === undefined) return current;
+    if (value === null) return null;
+    return normalizePhone(value);
   }
 }

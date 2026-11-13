@@ -86,127 +86,135 @@ export class RedemptionsService {
       dto,
       201,
       'solicitud_canje',
-      async (m) => {
-        await this.client(m, client);
-        const [own] = await this.requestFindParticipante(m, {
-          visitId,
-          clientId: client.clientId,
-        });
-        if (!own) throw new NotFoundException('Participación no encontrada.');
-      },
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        await this.operationalContext.lockActiveVisit(m, visitId, zone);
-        const [participant] = await this.requestFindParticipanteNext(m, {
-          visitId,
-          clientId: client.clientId,
-        });
-        if (!participant)
-          throw new NotFoundException('Participación no encontrada.');
-        if (
-          participant.status !== 'approved' ||
-          participant.account_status !== 'open'
-        )
-          throw new ConflictException(
-            'Se requiere una participación aprobada y cuenta abierta.',
-          );
-        const [cash] = await this.requestFindCaja(m, {
-          dayId: participant.dayId,
-        });
-        if (cash?.estado === 'closed')
-          throw new ConflictException('La caja de la jornada ya fue cerrada.');
-        const [bill] = await this.requestFindLiquidacion(m, {
-          account: participant.account,
-        });
-        if (bill)
-          throw new ConflictException(
-            'La cuenta tiene una liquidación pendiente.',
-          );
-        const [reward] = await this.requestFindRecompensa(m, {
-          rewardId: dto.rewardId,
-        });
-        if (!reward) throw new NotFoundException('Recompensa no disponible.');
-        if (reward.version !== dto.rewardVersion)
-          throw new ConflictException('La versión de la recompensa cambió.');
-        await this.requestFindCliente(m, {
-          clientId: client.clientId,
-        });
-        const [bal] = await this.requestFindMovimientoPuntos(m, {
-          clientId: client.clientId,
-        });
-        const [reserved] = await this.requestFindReservaPuntosCanje(m, {
-          clientId: client.clientId,
-        });
-        if (
-          BigInt(bal.balance) - BigInt(reserved.total) <
-          BigInt(reward.costo_puntos)
-        )
-          throw new ConflictException('Puntos disponibles insuficientes.');
-        let stock: { id: string; available: number } | undefined;
-        if (reward.tracks) {
-          [stock] = await this.requestFindInventarioDiario(m, {
-            dayId: participant.dayId,
-            id_producto: reward.id_producto,
-          });
-          if (!stock || stock.available < 1)
-            throw new ConflictException(
-              'Inventario insuficiente o sin inicializar.',
-            );
-        }
-        const [canje] = await this.requestInsertSolicitudCanje(m, {
-          clientId: client.clientId,
-          id: participant.id,
-          account: participant.account,
-          visitId,
-          dayId: participant.dayId,
-          rewardId: dto.rewardId,
-          version: reward.version,
-          id_producto: reward.id_producto,
-          tracks: reward.tracks,
-          costo_puntos: reward.costo_puntos,
-          userId: client.userId,
-        });
-        await this.requestInsertReservaPuntosCanje(m, {
-          id: canje.id,
-          clientId: client.clientId,
-          costo_puntos: reward.costo_puntos,
-        });
-        if (reward.tracks) {
-          await this.requestUpdateInventarioDiario(m, {
-            id: stock!.id,
-          });
-          await this.requestInsertReservaInventarioCanje(m, {
-            id: canje.id,
-            id2: stock!.id,
-          });
-        }
-        await this.reservations.history(
-          m,
-          canje.id,
-          client.userId,
-          'redemption.requested',
-          {
-            rewardId: dto.rewardId,
-            points: Number(reward.costo_puntos),
-            tracksInventory: reward.tracks,
-          },
-        );
-        await this.auditLog.append(
-          m,
-          actor,
-          'solicitud_canje',
-          canje.id,
-          'redemption.requested',
-          {
+      {
+        authorize: async (m) => {
+          await this.client(m, client);
+          const [own] = await this.requestFindParticipante(m, {
+            visitId,
             clientId: client.clientId,
+          });
+          if (!own) throw new NotFoundException('Participación no encontrada.');
+        },
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          await this.operationalContext.lockActiveVisit(m, visitId, zone);
+          const [participant] = await this.requestFindParticipanteNext(m, {
+            visitId,
+            clientId: client.clientId,
+          });
+          if (!participant)
+            throw new NotFoundException('Participación no encontrada.');
+          if (
+            participant.status !== 'approved' ||
+            participant.account_status !== 'open'
+          )
+            throw new ConflictException(
+              'Se requiere una participación aprobada y cuenta abierta.',
+            );
+          const [cash] = await this.requestFindCaja(m, {
+            dayId: participant.dayId,
+          });
+          if (cash?.estado === 'closed')
+            throw new ConflictException(
+              'La caja de la jornada ya fue cerrada.',
+            );
+          const [bill] = await this.requestFindLiquidacion(m, {
+            account: participant.account,
+          });
+          if (bill)
+            throw new ConflictException(
+              'La cuenta tiene una liquidación pendiente.',
+            );
+          const [reward] = await this.requestFindRecompensa(m, {
             rewardId: dto.rewardId,
-            points: Number(reward.costo_puntos),
-          },
-        );
-        return {
-          resourceId: canje.id,
-          response: await this.queries.redemption(canje.id, client.clientId, m),
-        };
+          });
+          if (!reward) throw new NotFoundException('Recompensa no disponible.');
+          if (reward.version !== dto.rewardVersion)
+            throw new ConflictException('La versión de la recompensa cambió.');
+          await this.requestFindCliente(m, {
+            clientId: client.clientId,
+          });
+          const [bal] = await this.requestFindMovimientoPuntos(m, {
+            clientId: client.clientId,
+          });
+          const [reserved] = await this.requestFindReservaPuntosCanje(m, {
+            clientId: client.clientId,
+          });
+          if (
+            BigInt(bal.balance) - BigInt(reserved.total) <
+            BigInt(reward.costo_puntos)
+          )
+            throw new ConflictException('Puntos disponibles insuficientes.');
+          let stock: { id: string; available: number } | undefined;
+          if (reward.tracks) {
+            [stock] = await this.requestFindInventarioDiario(m, {
+              dayId: participant.dayId,
+              id_producto: reward.id_producto,
+            });
+            if (!stock || stock.available < 1)
+              throw new ConflictException(
+                'Inventario insuficiente o sin inicializar.',
+              );
+          }
+          const [canje] = await this.requestInsertSolicitudCanje(m, {
+            clientId: client.clientId,
+            id: participant.id,
+            account: participant.account,
+            visitId,
+            dayId: participant.dayId,
+            rewardId: dto.rewardId,
+            version: reward.version,
+            id_producto: reward.id_producto,
+            tracks: reward.tracks,
+            costo_puntos: reward.costo_puntos,
+            userId: client.userId,
+          });
+          await this.requestInsertReservaPuntosCanje(m, {
+            id: canje.id,
+            clientId: client.clientId,
+            costo_puntos: reward.costo_puntos,
+          });
+          if (reward.tracks) {
+            await this.requestUpdateInventarioDiario(m, {
+              id: stock!.id,
+            });
+            await this.requestInsertReservaInventarioCanje(m, {
+              id: canje.id,
+              id2: stock!.id,
+            });
+          }
+          await this.reservations.history(
+            m,
+            canje.id,
+            client.userId,
+            'redemption.requested',
+            {
+              rewardId: dto.rewardId,
+              points: Number(reward.costo_puntos),
+              tracksInventory: reward.tracks,
+            },
+          );
+          await this.auditLog.append(
+            m,
+            actor,
+            'solicitud_canje',
+            canje.id,
+            'redemption.requested',
+            {
+              clientId: client.clientId,
+              rewardId: dto.rewardId,
+              points: Number(reward.costo_puntos),
+            },
+          );
+          return {
+            resourceId: canje.id,
+            response: await this.queries.redemption(
+              canje.id,
+              client.clientId,
+              m,
+            ),
+          };
+        },
       },
     );
   }
@@ -220,49 +228,51 @@ export class RedemptionsService {
       {},
       200,
       'solicitud_canje',
-      async (m) => {
-        await this.client(m, client);
-        const [own] = await this.cancelFindSolicitudCanje(m, {
-          id,
-          clientId: client.clientId,
-        });
-        if (!own) throw new NotFoundException('Canje no encontrado.');
-      },
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        await this.requestFindCliente(m, {
-          clientId: client.clientId,
-        });
-        const [s] = await this.cancelFindSolicitudCanjeNext(m, {
-          id,
-          clientId: client.clientId,
-        });
-        if (!s) throw new NotFoundException('Canje no encontrado.');
-        if (s.estado !== 'pending')
-          throw new ConflictException('El canje ya fue resuelto.');
-        await this.reservations.release(m, id, 'cancelled');
-        await this.cancelUpdateSolicitudCanje(m, {
-          id,
-          userId: client.userId,
-        });
-        await this.reservations.history(
-          m,
-          id,
-          client.userId,
-          'redemption.cancelled',
-        );
-        await this.auditLog.append(
-          m,
-          actor,
-          'solicitud_canje',
-          id,
-          'redemption.cancelled',
-          {},
-        );
-        return {
-          resourceId: id,
-          response: await this.queries.redemption(id, client.clientId, m),
-        };
+      {
+        authorize: async (m) => {
+          await this.client(m, client);
+          const [own] = await this.cancelFindSolicitudCanje(m, {
+            id,
+            clientId: client.clientId,
+          });
+          if (!own) throw new NotFoundException('Canje no encontrado.');
+        },
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          await this.requestFindCliente(m, {
+            clientId: client.clientId,
+          });
+          const [s] = await this.cancelFindSolicitudCanjeNext(m, {
+            id,
+            clientId: client.clientId,
+          });
+          if (!s) throw new NotFoundException('Canje no encontrado.');
+          if (s.estado !== 'pending')
+            throw new ConflictException('El canje ya fue resuelto.');
+          await this.reservations.release(m, id, 'cancelled');
+          await this.cancelUpdateSolicitudCanje(m, {
+            id,
+            userId: client.userId,
+          });
+          await this.reservations.history(
+            m,
+            id,
+            client.userId,
+            'redemption.cancelled',
+          );
+          await this.auditLog.append(
+            m,
+            actor,
+            'solicitud_canje',
+            id,
+            'redemption.cancelled',
+            {},
+          );
+          return {
+            resourceId: id,
+            response: await this.queries.redemption(id, client.clientId, m),
+          };
+        },
       },
     );
   }

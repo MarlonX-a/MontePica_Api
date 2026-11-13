@@ -68,8 +68,10 @@ export class CatalogService {
       });
     if (query.search?.trim())
       builder.andWhere(
-        "(product.name ILIKE :search ESCAPE E'\\\\' OR product.description ILIKE :search ESCAPE E'\\\\')",
-        { search: `%${query.search.trim().replace(/[\\%_]/g, '\\$&')}%` },
+        String.raw`(product.name ILIKE :search ESCAPE E'\\' OR product.description ILIKE :search ESCAPE E'\\')`,
+        {
+          search: `%${query.search.trim().replace(/[\\%_]/g, String.raw`\$&`)}%`,
+        },
       );
     return builder
       .orderBy('product.sortOrder', 'ASC')

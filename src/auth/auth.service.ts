@@ -115,7 +115,7 @@ export class AuthService {
         dto.password,
         user?.passwordHash,
       );
-      if (!user || !user.active || !passwordMatches) {
+      if (!user?.active || !passwordMatches) {
         throw new UnauthorizedException('Correo o contraseña incorrectos.');
       }
       user.role = await this.identities.findUserRole(manager, user.id);
@@ -210,8 +210,7 @@ export class AuthService {
     await this.dataSource.transaction(async (manager) => {
       const user = await this.identities.lockUserWithPassword(manager, userId);
       if (
-        !user ||
-        !user.active ||
+        !user?.active ||
         !(await verifyPassword(currentPassword, user.passwordHash))
       ) {
         throw new UnauthorizedException('La contraseña actual no es correcta.');

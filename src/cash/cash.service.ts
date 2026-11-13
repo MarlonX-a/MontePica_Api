@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   BadRequestException,
   ConflictException,
@@ -184,86 +185,91 @@ export class CashService {
       dto,
       200,
       'cierre_caja',
-      (manager) => this.authorizeCashClosure(manager, actor),
-      async (manager) => {
-        await this.operationalContext.lockTableOperations(manager);
-        const [unlockedRef] = await this.closeCashFindCaja(manager, {
-          cashRegisterId,
-        });
-        if (!unlockedRef) throw new NotFoundException('Caja no encontrada.');
-        await this.closeCashFindJornadaOperativa(manager, {
-          day: unlockedRef.day,
-        });
-        const [ref] = await this.closeCashFindCajaNext(manager, {
-          cashRegisterId,
-        });
-        if (!ref) throw new NotFoundException('Caja no encontrada.');
-        if (ref.status !== 'open')
-          throw new ConflictException('La caja ya está cerrada.');
-        const blockers = await this.closingBlockers(
-          cashRegisterId,
-          ref.day,
-          manager,
-        );
-        if (blockers.total)
-          throw new ConflictException(
-            'Resuelve los bloqueos de caja antes de cerrarla.',
+      {
+        authorize: (manager) => this.authorizeCashClosure(manager, actor),
+        action: async (manager) => {
+          await this.operationalContext.lockTableOperations(manager);
+          const [unlockedRef] = await this.closeCashFindCaja(manager, {
+            cashRegisterId,
+          });
+          if (!unlockedRef) throw new NotFoundException('Caja no encontrada.');
+          await this.closeCashFindJornadaOperativa(manager, {
+            day: unlockedRef.day,
+          });
+          const [ref] = await this.closeCashFindCajaNext(manager, {
+            cashRegisterId,
+          });
+          if (!ref) throw new NotFoundException('Caja no encontrada.');
+          if (ref.status !== 'open')
+            throw new ConflictException('La caja ya está cerrada.');
+          const blockers = await this.closingBlockers(
+            cashRegisterId,
+            ref.day,
+            manager,
           );
-        const summary = await this.cashSnapshot(
-          manager,
-          cashRegisterId,
-          BigInt(ref.opening),
-        );
-        const counted = BigInt(dto.countedCents);
-        const expected = BigInt(summary.expectedCents);
-        const difference = counted - expected;
-        const max = BigInt(Number.MAX_SAFE_INTEGER);
-        if (
-          counted > max ||
-          expected < -max ||
-          expected > max ||
-          difference < -max ||
-          difference > max
-        ) {
-          throw new ConflictException(
-            'El saldo conciliado excede el rango seguro.',
+          if (blockers.total)
+            throw new ConflictException(
+              'Resuelve los bloqueos de caja antes de cerrarla.',
+            );
+          const summary = await this.cashSnapshot(
+            manager,
+            cashRegisterId,
+            BigInt(ref.opening),
           );
-        }
-        if (difference !== 0n && !dto.reason)
-          throw new BadRequestException(
-            'Debes justificar el faltante o sobrante.',
-          );
-        await this.rewards.releaseForOperatingDay(manager, ref.day);
-        const [closure] = await this.closeCashInsertCierreCaja(manager, {
-          cashRegisterId,
-          userId: actor.userId,
-          openingCents: Number(summary.openingCents),
-          cashIncomeCents: Number(summary.cashIncomeCents),
-          cashRefundsCents: Number(summary.cashRefundsCents),
-          expected: Number(expected),
-          countedCents: dto.countedCents,
-          difference: Number(difference),
-          reason: dto.reason ?? null,
-        });
-        await this.closeCashUpdateCaja(manager, {
-          cashRegisterId,
-        });
-        await this.auditRecords.append(
-          manager,
-          { userId: actor.userId },
-          'caja',
-          cashRegisterId,
-          'operations.cash_closed',
-          {
-            closureId: closure.id,
-            expectedCents: Number(expected),
+          const counted = BigInt(dto.countedCents);
+          const expected = BigInt(summary.expectedCents);
+          const difference = counted - expected;
+          const max = BigInt(Number.MAX_SAFE_INTEGER);
+          if (
+            counted > max ||
+            expected < -max ||
+            expected > max ||
+            difference < -max ||
+            difference > max
+          ) {
+            throw new ConflictException(
+              'El saldo conciliado excede el rango seguro.',
+            );
+          }
+          if (difference !== 0n && !dto.reason)
+            throw new BadRequestException(
+              'Debes justificar el faltante o sobrante.',
+            );
+          await this.rewards.releaseForOperatingDay(manager, ref.day);
+          const [closure] = await this.closeCashInsertCierreCaja(manager, {
+            cashRegisterId,
+            userId: actor.userId,
+            openingCents: Number(summary.openingCents),
+            cashIncomeCents: Number(summary.cashIncomeCents),
+            cashRefundsCents: Number(summary.cashRefundsCents),
+            expected: Number(expected),
             countedCents: dto.countedCents,
-            differenceCents: Number(difference),
+            difference: Number(difference),
             reason: dto.reason ?? null,
-          },
-        );
-        const response = await this.getCashClosureWith(manager, cashRegisterId);
-        return { resourceId: closure.id, response };
+          });
+          await this.closeCashUpdateCaja(manager, {
+            cashRegisterId,
+          });
+          await this.auditRecords.append(
+            manager,
+            { userId: actor.userId },
+            'caja',
+            cashRegisterId,
+            'operations.cash_closed',
+            {
+              closureId: closure.id,
+              expectedCents: Number(expected),
+              countedCents: dto.countedCents,
+              differenceCents: Number(difference),
+              reason: dto.reason ?? null,
+            },
+          );
+          const response = await this.getCashClosureWith(
+            manager,
+            cashRegisterId,
+          );
+          return { resourceId: closure.id, response };
+        },
       },
     );
   }
@@ -862,7 +868,7 @@ export class CashService {
       }
     > = {};
     let total = 0;
-    for (const group of groups) {
+    await forEachSequential(groups, async (group) => {
       group.query.setParameters({ cash: cashId, day: dayId });
       const count = Number(
         (
@@ -886,7 +892,7 @@ export class CashService {
         limit,
       };
       total += count;
-    }
+    });
     return { ...blockers, total };
   }
 }

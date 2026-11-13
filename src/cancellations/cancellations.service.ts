@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   ConflictException,
   Injectable,
@@ -90,83 +91,85 @@ export class CancellationsService {
       dto,
       201,
       'solicitud_cancelacion',
-      async (m) => {
-        if (client) {
-          await this.participants.authenticate(m, client);
-          const [o] = await this.createFindPedido(m, {
+      {
+        authorize: async (m) => {
+          if (client) {
+            await this.participants.authenticate(m, client);
+            const [o] = await this.createFindPedido(m, {
+              orderId,
+              clientId: client.clientId,
+            });
+            if (!o) throw new NotFoundException('Pedido no encontrado.');
+          } else
+            await this.staff(
+              m,
+              actor as AuthenticatedRequestContext,
+              'cancellations.create',
+            );
+        },
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const [o] = await this.createFindPedidoNext(m, {
             orderId,
-            clientId: client.clientId,
           });
           if (!o) throw new NotFoundException('Pedido no encontrado.');
-        } else
-          await this.staff(
-            m,
-            actor as AuthenticatedRequestContext,
-            'cancellations.create',
-          );
-      },
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const [o] = await this.createFindPedidoNext(m, {
-          orderId,
-        });
-        if (!o) throw new NotFoundException('Pedido no encontrado.');
-        const eligible =
-          (o.modalidad === 'local' &&
-            ['preparing', 'ready'].includes(o.estado)) ||
-          (o.modalidad === 'delivery' &&
-            ['submitted', 'preparing', 'ready'].includes(o.estado));
-        if (!eligible || o.numero !== dto.expectedVersion)
-          throw new ConflictException(
-            'El pedido o su version no admite cancelacion.',
-          );
-        const [pay] = await this.createFindLiquidacion(m, {
-          id_cuenta: o.id_cuenta,
-        });
-        if (pay)
-          throw new ConflictException(
-            'Existe una transferencia pendiente de revision.',
-          );
-        const [duplicate] = await this.createFindSolicitudCancelacion(m, {
-          orderId,
-        });
-        if (duplicate)
-          throw new ConflictException('Ya existe una solicitud pendiente.');
-        if (o.modalidad === 'delivery' && o.estado === 'submitted') {
-          const [paid] = await this.createFindLiquidacionNext(m, {
+          const eligible =
+            (o.modalidad === 'local' &&
+              ['preparing', 'ready'].includes(o.estado)) ||
+            (o.modalidad === 'delivery' &&
+              ['submitted', 'preparing', 'ready'].includes(o.estado));
+          if (!eligible || o.numero !== dto.expectedVersion)
+            throw new ConflictException(
+              'El pedido o su version no admite cancelacion.',
+            );
+          const [pay] = await this.createFindLiquidacion(m, {
             id_cuenta: o.id_cuenta,
           });
-          if (!paid)
+          if (pay)
             throw new ConflictException(
-              'Utiliza la anulacion directa para pedidos sin pago.',
+              'Existe una transferencia pendiente de revision.',
             );
-        }
-        const [r] = await this.createInsertSolicitudCancelacion(m, {
-          orderId,
-          id_version: o.id_version,
-          estado: o.estado,
-          reason: dto.reason,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-          requestedByClient: !!client,
-        });
-        await this.createInsertHistorialCancelacion(m, {
-          id: r.id,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-        });
-        await this.auditLog.append(
-          m,
-          actor,
-          'solicitud_cancelacion',
-          r.id,
-          'cancellation.requested',
-          { orderId, reason: dto.reason },
-        );
-        return {
-          resourceId: r.id,
-          response: await this.detail(r.id, client?.clientId, m),
-        };
+          const [duplicate] = await this.createFindSolicitudCancelacion(m, {
+            orderId,
+          });
+          if (duplicate)
+            throw new ConflictException('Ya existe una solicitud pendiente.');
+          if (o.modalidad === 'delivery' && o.estado === 'submitted') {
+            const [paid] = await this.createFindLiquidacionNext(m, {
+              id_cuenta: o.id_cuenta,
+            });
+            if (!paid)
+              throw new ConflictException(
+                'Utiliza la anulacion directa para pedidos sin pago.',
+              );
+          }
+          const [r] = await this.createInsertSolicitudCancelacion(m, {
+            orderId,
+            id_version: o.id_version,
+            estado: o.estado,
+            reason: dto.reason,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+            requestedByClient: !!client,
+          });
+          await this.createInsertHistorialCancelacion(m, {
+            id: r.id,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+          });
+          await this.auditLog.append(
+            m,
+            actor,
+            'solicitud_cancelacion',
+            r.id,
+            'cancellation.requested',
+            { orderId, reason: dto.reason },
+          );
+          return {
+            resourceId: r.id,
+            response: await this.detail(r.id, client?.clientId, m),
+          };
+        },
       },
     );
   }
@@ -220,152 +223,149 @@ export class CancellationsService {
       sessionId: client?.userSessionId ?? '',
     };
     return this.idem.run(
-      client
-        ? client.guestSessionId
-          ? { guestSessionId: client.guestSessionId }
-          : { userId: client.userId }
-        : { userId: a.userId },
+      client ? this.clientAuditActor(client) : { userId: a.userId },
       `cancellations/${id.toLowerCase()}/${decision}`,
       key,
       { reason: reason ?? null },
       200,
       'solicitud_cancelacion',
-      async (m) => {
-        if (client) {
-          await this.participants.authenticate(m, client);
-          await this.detail(id, client.clientId, m);
-        } else
-          await this.staff(
-            m,
-            a,
-            decision === 'approve' || decision === 'reject'
-              ? 'cancellations.decide'
-              : 'cancellations.read',
-            decision !== 'withdraw',
-          );
-      },
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const [r] = await this.decideFindSolicitudCancelacion(m, {
-          id,
-        });
-        if (!r) throw new NotFoundException('Solicitud no encontrada.');
-        const [currentVersion] = await this.decideFindVersionPedido(m, {
-          id_pedido: r.id_pedido,
-        });
-        if (
-          r.estado !== 'pending' ||
-          r.current_order !== r.estado_pedido ||
-          currentVersion?.id_version !== r.id_version
-        )
-          throw new ConflictException('La solicitud ya no está vigente.');
-        if (
-          decision === 'withdraw' &&
-          (!r.solicitada_cliente ||
-            !client ||
-            (client.guestSessionId
-              ? r.actor_sesion_cliente !== client.guestSessionId
-              : r.actor_usuario !== client.userId))
-        )
-          throw new NotFoundException('Solicitud no encontrada.');
-        let status =
-          decision === 'approve'
-            ? 'approved'
-            : decision === 'reject'
-              ? 'rejected'
-              : 'withdrawn';
-        let refund = null;
-        if (decision === 'approve') {
-          const [pending] = await this.decideFindPago(m, {
-            id_cuenta: r.id_cuenta,
+      {
+        authorize: async (m) => {
+          if (client) {
+            await this.participants.authenticate(m, client);
+            await this.detail(id, client.clientId, m);
+          } else
+            await this.staff(
+              m,
+              a,
+              decision === 'approve' || decision === 'reject'
+                ? 'cancellations.decide'
+                : 'cancellations.read',
+              decision !== 'withdraw',
+            );
+        },
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const [r] = await this.decideFindSolicitudCancelacion(m, {
+            id,
           });
-          if (pending)
-            throw new ConflictException('Existe transferencia pendiente.');
-          await this.decideUpdatePedido(m, {
+          if (!r) throw new NotFoundException('Solicitud no encontrada.');
+          const [currentVersion] = await this.decideFindVersionPedido(m, {
             id_pedido: r.id_pedido,
           });
-          await this.rewards.refundForOrder(m, r.id_pedido, {
-            userId: a.userId,
-          });
-          await this.decideInsertHistorialPedido(m, {
-            id_pedido: r.id_pedido,
-            id_version: r.id_version,
-            userId: a.userId,
-            current_order: r.current_order,
-          });
-          await this.decideLockReservaInventario(m, {
-            id_version: r.id_version,
-          });
-          await this.decideUpdateAsignacionConsumo(m, {
-            id_version: r.id_version,
-          });
-          await this.decideUpdateLiquidacion(m, {
-            id_cuenta: r.id_cuenta,
-            userId: a.userId,
-          });
-          await this.decideUpdateDetalleLiquidacion(m, {
-            id_cuenta: r.id_cuenta,
-          });
-          if (r.modalidad === 'delivery' && r.payment_status === 'confirmed') {
-            const amount = Number(r.total_ctvs);
-            if (
-              !Number.isSafeInteger(amount) ||
-              amount <= 0 ||
-              amount > Number(r.importe_ctvs)
-            )
-              throw new ConflictException('Importe de devolución no válido.');
-            const [d] = await this.decideInsertDevolucion(m, {
-              id,
-              id_pago: r.id_pago,
-              id_pedido: r.id_pedido,
-              amount,
-              userId: a.userId,
-            });
-            await this.decideInsertHistorialDevolucion(m, {
-              id: d.id,
-              userId: a.userId,
-              detailJson: JSON.stringify({
-                cancellationRequestId: id,
-                paymentId: r.id_pago,
-                amountCents: amount,
-              }),
-            });
-            refund = { id: d.id, amountCents: amount, status: 'pending' };
-            await this.accountLifecycle.closeAccount(m, {
+          if (
+            r.estado !== 'pending' ||
+            r.current_order !== r.estado_pedido ||
+            currentVersion?.id_version !== r.id_version
+          )
+            throw new ConflictException('La solicitud ya no está vigente.');
+          if (
+            decision === 'withdraw' &&
+            (!r.solicitada_cliente ||
+              !client ||
+              (client.guestSessionId
+                ? r.actor_sesion_cliente !== client.guestSessionId
+                : r.actor_usuario !== client.userId))
+          )
+            throw new NotFoundException('Solicitud no encontrada.');
+          const status = {
+            approve: 'approved',
+            reject: 'rejected',
+            withdraw: 'withdrawn',
+          }[decision];
+          let refund = null;
+          if (decision === 'approve') {
+            const [pending] = await this.decideFindPago(m, {
               id_cuenta: r.id_cuenta,
             });
-            await this.decideUpdateAcumulacionPuntos(m, {
-              id_pago: r.id_pago,
+            if (pending)
+              throw new ConflictException('Existe transferencia pendiente.');
+            await this.decideUpdatePedido(m, {
+              id_pedido: r.id_pedido,
             });
+            await this.rewards.refundForOrder(m, r.id_pedido, {
+              userId: a.userId,
+            });
+            await this.decideInsertHistorialPedido(m, {
+              id_pedido: r.id_pedido,
+              id_version: r.id_version,
+              userId: a.userId,
+              current_order: r.current_order,
+            });
+            await this.decideLockReservaInventario(m, {
+              id_version: r.id_version,
+            });
+            await this.decideUpdateAsignacionConsumo(m, {
+              id_version: r.id_version,
+            });
+            await this.decideUpdateLiquidacion(m, {
+              id_cuenta: r.id_cuenta,
+              userId: a.userId,
+            });
+            await this.decideUpdateDetalleLiquidacion(m, {
+              id_cuenta: r.id_cuenta,
+            });
+            if (
+              r.modalidad === 'delivery' &&
+              r.payment_status === 'confirmed'
+            ) {
+              const amount = this.validateRefundAmount(r);
+              const [d] = await this.decideInsertDevolucion(m, {
+                id,
+                id_pago: r.id_pago,
+                id_pedido: r.id_pedido,
+                amount,
+                userId: a.userId,
+              });
+              await this.decideInsertHistorialDevolucion(m, {
+                id: d.id,
+                userId: a.userId,
+                detailJson: JSON.stringify({
+                  cancellationRequestId: id,
+                  paymentId: r.id_pago,
+                  amountCents: amount,
+                }),
+              });
+              refund = { id: d.id, amountCents: amount, status: 'pending' };
+              await this.accountLifecycle.closeAccount(m, {
+                id_cuenta: r.id_cuenta,
+              });
+              await this.decideUpdateAcumulacionPuntos(m, {
+                id_pago: r.id_pago,
+              });
+            }
           }
-        }
-        await this.decideUpdateSolicitudCancelacion(m, {
-          id,
-          status,
-          userId: a.userId || null,
-          rejectionReason: decision === 'reject' ? reason : null,
-        });
-        await this.decideInsertHistorialCancelacion(m, {
-          id,
-          userId: a.userId || null,
-          guestSessionId: client?.guestSessionId ?? null,
-          decision,
-        });
-        await this.auditLog.append(
-          m,
-          {
-            userId: a.userId || client?.userId,
-            guestSessionId: client?.guestSessionId,
-          },
-          'solicitud_cancelacion',
-          id,
-          `cancellation.${decision}`,
-          { reason: reason ?? null, refund },
-        );
-        return {
-          resourceId: id,
-          response: { ...(await this.detail(id, client?.clientId, m)), refund },
-        };
+          await this.decideUpdateSolicitudCancelacion(m, {
+            id,
+            status,
+            userId: a.userId || null,
+            rejectionReason: decision === 'reject' ? reason : null,
+          });
+          await this.decideInsertHistorialCancelacion(m, {
+            id,
+            userId: a.userId || null,
+            guestSessionId: client?.guestSessionId ?? null,
+            decision,
+          });
+          await this.auditLog.append(
+            m,
+            {
+              userId: a.userId || client?.userId,
+              guestSessionId: client?.guestSessionId,
+            },
+            'solicitud_cancelacion',
+            id,
+            `cancellation.${decision}`,
+            { reason: reason ?? null, refund },
+          );
+          return {
+            resourceId: id,
+            response: {
+              ...(await this.detail(id, client?.clientId, m)),
+              refund,
+            },
+          };
+        },
       },
     );
   }
@@ -657,7 +657,7 @@ export class CancellationsService {
       .orderBy('r.id_inventario')
       .setLock('pessimistic_write', undefined, ['r'])
       .getRawMany<{ id: string; inventoryId: string; quantity: number }>();
-    for (const reserve of reserves) {
+    await forEachSequential(reserves, async (reserve) => {
       await manager
         .getRepository(InventoryReservation)
         .update(
@@ -671,7 +671,7 @@ export class CancellationsService {
           'cantidad_reservada',
           reserve.quantity,
         );
-    }
+    });
   }
 
   private async decideUpdateAsignacionConsumo(
@@ -883,5 +883,22 @@ export class CancellationsService {
       .setParameters(queryParameters2)
       .getRawMany();
     return { rows, total };
+  }
+  private validateRefundAmount(
+    request: DecideFindSolicitudCancelacionRow,
+  ): number {
+    const amount = Number(request.total_ctvs);
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0 ||
+      amount > Number(request.importe_ctvs)
+    ) {
+      throw new ConflictException('Importe de devolución no válido.');
+    }
+    return amount;
+  }
+  private clientAuditActor(client: ClientIdentity) {
+    if (client.guestSessionId) return { guestSessionId: client.guestSessionId };
+    return { userId: client.userId };
   }
 }

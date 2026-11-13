@@ -19,12 +19,11 @@ class CommandContextModule {}
 
 /** A command owns its database connection and providers; it never starts HTTP or expiry tasks. */
 export function createCommandContext(kind: 'admin' | 'seed' | 'receipts') {
-  const feature =
-    kind === 'admin'
-      ? BootstrapModule
-      : kind === 'seed'
-        ? CatalogSeedModule
-        : StorageModule;
+  const feature = {
+    admin: BootstrapModule,
+    seed: CatalogSeedModule,
+    receipts: StorageModule,
+  }[kind];
   return NestFactory.createApplicationContext(
     {
       module: CommandContextModule,

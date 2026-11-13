@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   ConflictException,
   Injectable,
@@ -102,70 +103,78 @@ export class OperatingDayClosureService {
       dto,
       200,
       'cierre_jornada',
-      (manager) => this.authorizeOperatingAction(manager, actor, 'close'),
-      async (manager) => {
-        await this.lockOperations(manager);
-        const day = await this.findDayForUpdate(manager, id);
-        if (!day) throw new NotFoundException('Jornada no encontrada.');
-        if (day.status !== 'open')
-          throw new ConflictException('La jornada ya está cerrada.');
-        await this.lockDayResources(manager, id);
-        const blockers = await this.blockers(manager, id, 1, 1);
-        if (blockers.total)
-          throw new ConflictException(
-            'Resuelve los pendientes de la jornada antes de cerrarla.',
-          );
+      {
+        authorize: (manager) =>
+          this.authorizeOperatingAction(manager, actor, 'close'),
+        action: async (manager) => {
+          await this.lockOperations(manager);
+          const day = await this.findDayForUpdate(manager, id);
+          if (!day) throw new NotFoundException('Jornada no encontrada.');
+          if (day.status !== 'open')
+            throw new ConflictException('La jornada ya está cerrada.');
+          await this.lockDayResources(manager, id);
+          const blockers = await this.blockers(manager, id, 1, 1);
+          if (blockers.total)
+            throw new ConflictException(
+              'Resuelve los pendientes de la jornada antes de cerrarla.',
+            );
 
-        const before = await this.cleanupCounts(manager, id);
-        await this.rewards.releaseForOperatingDay(
-          manager,
-          id,
-          'redemption.day_closed',
-        );
-        const visitCleanup = await this.participants.closeForOperatingDay(
-          manager,
-          id,
-          { userId: actor.userId },
-        );
-        const cancelledDeliveryRequests =
-          await this.delivery.cancelUnusedForOperatingDay(manager, id, actor);
-        const pendingRefunds = await this.pendingOperatingDayRefunds(
-          manager,
-          id,
-        );
-        if (await this.assertNoReservations(manager, id))
-          throw new ConflictException(
-            'Quedaron reservas de canje sin resolver; el cierre se revirtió.',
+          const before = await this.cleanupCounts(manager, id);
+          await this.rewards.releaseForOperatingDay(
+            manager,
+            id,
+            'redemption.day_closed',
           );
+          const visitCleanup = await this.participants.closeForOperatingDay(
+            manager,
+            id,
+            { userId: actor.userId },
+          );
+          const cancelledDeliveryRequests =
+            await this.delivery.cancelUnusedForOperatingDay(manager, id, actor);
+          const pendingRefunds = await this.pendingOperatingDayRefunds(
+            manager,
+            id,
+          );
+          if (await this.assertNoReservations(manager, id))
+            throw new ConflictException(
+              'Quedaron reservas de canje sin resolver; el cierre se revirtió.',
+            );
 
-        const current = await this.findDay(manager, id);
-        const summary: Record<string, number> = {
-          ...before,
-          ...visitCleanup,
-          cancelledDeliveryRequests,
-          pendingRefunds: pendingRefunds.total,
-          pendingRefundAmountCents: pendingRefunds.amountCents,
-        };
-        const closure = await this.insertClosure(manager, {
-          dayId: id,
-          cashClosureId: current?.cashClosureId ?? null,
-          userId: actor.userId,
-          notes: dto.notes ?? null,
-          summary,
-        });
-        await this.closeDay(manager, id);
-        await this.auditRecords.append(
-          manager,
-          { userId: actor.userId },
-          'jornada_operativa',
-          id,
-          'operations.day_closed',
-          { before, summary, closureId: closure.id, notes: dto.notes ?? null },
-        );
-        return {
-          resourceId: closure.id,
-          response: { ...closure, currency: 'USD' as const },
-        };
+          const current = await this.findDay(manager, id);
+          const summary: Record<string, number> = {
+            ...before,
+            ...visitCleanup,
+            cancelledDeliveryRequests,
+            pendingRefunds: pendingRefunds.total,
+            pendingRefundAmountCents: pendingRefunds.amountCents,
+          };
+          const closure = await this.insertClosure(manager, {
+            dayId: id,
+            cashClosureId: current?.cashClosureId ?? null,
+            userId: actor.userId,
+            notes: dto.notes ?? null,
+            summary,
+          });
+          await this.closeDay(manager, id);
+          await this.auditRecords.append(
+            manager,
+            { userId: actor.userId },
+            'jornada_operativa',
+            id,
+            'operations.day_closed',
+            {
+              before,
+              summary,
+              closureId: closure.id,
+              notes: dto.notes ?? null,
+            },
+          );
+          return {
+            resourceId: closure.id,
+            response: { ...closure, currency: 'USD' as const },
+          };
+        },
       },
     );
   }
@@ -377,7 +386,7 @@ export class OperatingDayClosureService {
     let total = 0,
       skip = (page - 1) * limit;
     const items: OperatingDayBlockerRow[] = [];
-    for (const group of queries) {
+    await forEachSequential(queries, async (group) => {
       group.query.setParameter('day', dayId);
       const count = Number(
         (
@@ -390,7 +399,7 @@ export class OperatingDayClosureService {
       total += count;
       if (skip >= count) {
         skip -= count;
-        continue;
+        return;
       }
       if (items.length < limit) {
         const rows = await group.query
@@ -410,7 +419,7 @@ export class OperatingDayClosureService {
         );
       }
       skip = 0;
-    }
+    });
     return { items, total };
   }
 

@@ -1,3 +1,4 @@
+import { booleanQueryValue } from './boolean-query.transform.js';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
@@ -32,16 +33,12 @@ export class ListAdminQueryDto {
   search?: string;
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(({ value }) =>
-    value === 'true' ? true : value === 'false' ? false : value,
-  )
+  @Transform(({ value }) => booleanQueryValue(value))
   @IsBoolean()
   active?: boolean;
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(({ value }) =>
-    value === 'true' ? true : value === 'false' ? false : value,
-  )
+  @Transform(({ value }) => booleanQueryValue(value))
   @IsBoolean()
   visibleInMenu?: boolean;
   @ApiPropertyOptional()

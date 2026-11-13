@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   BadRequestException,
   ConflictException,
@@ -138,7 +139,7 @@ export class InventoryService {
           products.map((product: { id: string }) => [product.id, product]),
         );
         const result: InventoryItem[] = [];
-        for (const item of normalizedItems) {
+        await forEachSequential(normalizedItems, async (item) => {
           const product = productById.get(item.productId);
           const existing = await this.initializeFindInventarioDiario(manager, {
             dayId,
@@ -189,7 +190,7 @@ export class InventoryService {
             },
           );
           result.push(response);
-        }
+        });
         return { items: result };
       },
     );
@@ -223,9 +224,7 @@ export class InventoryService {
           actor,
           inventory,
           product,
-          dto.type,
-          delta,
-          reason,
+          { type: dto.type, delta, reason },
         );
         await this.audit(
           manager,
@@ -278,10 +277,12 @@ export class InventoryService {
           actor,
           inventory,
           product,
-          'adjustment',
-          delta,
-          reason,
-          dto.countedQuantity,
+          {
+            type: 'adjustment',
+            delta,
+            reason,
+            countedQuantity: dto.countedQuantity,
+          },
         );
         await this.audit(
           manager,
@@ -385,11 +386,14 @@ export class InventoryService {
       reservedQuantity: number;
     },
     product: { productId: string; sku: string; productName: string },
-    type: string,
-    delta: number,
-    reason: string,
-    countedQuantity?: number,
+    movement: {
+      type: string;
+      delta: number;
+      reason: string;
+      countedQuantity?: number;
+    },
   ) {
+    const { type, delta, reason, countedQuantity } = movement;
     const beforeQuantity = Number(inventory.physicalQuantity);
     const nextQuantity = countedQuantity ?? beforeQuantity + delta;
     if (
@@ -1056,10 +1060,10 @@ export class InventoryService {
       return `$${values.length}`;
     };
     if (query.search?.trim()) {
-      const search = query.search.trim().replace(/[\\%_]/g, '\\$&');
+      const search = query.search.trim().replace(/[\\%_]/g, String.raw`\$&`);
       const parameter = bind(`%${search}%`);
       filters.push(
-        `(p."nombre" ILIKE ${parameter} ESCAPE E'\\\\' OR p."sku" ILIKE ${parameter} ESCAPE E'\\\\')`,
+        String.raw`(p."nombre" ILIKE ${parameter} ESCAPE E'\\' OR p."sku" ILIKE ${parameter} ESCAPE E'\\')`,
       );
     }
     if (query.categoryId)

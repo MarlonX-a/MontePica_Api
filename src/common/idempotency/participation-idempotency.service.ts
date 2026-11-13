@@ -24,11 +24,14 @@ export class ParticipationIdempotencyService {
     request: unknown,
     status: number,
     resourceType: string,
-    authorize: (manager: EntityManager) => Promise<void>,
-    action: (
-      manager: EntityManager,
-    ) => Promise<{ resourceId: string; response: T }>,
+    handlers: {
+      authorize: (manager: EntityManager) => Promise<void>;
+      action: (
+        manager: EntityManager,
+      ) => Promise<{ resourceId: string; response: T }>;
+    },
   ): Promise<T> {
+    const { authorize, action } = handlers;
     if (!key || key.length > 128 || key.trim() !== key)
       throw new BadRequestException(
         'Envía Idempotency-Key con entre 1 y 128 caracteres, sin espacios externos.',
@@ -60,8 +63,7 @@ export class ParticipationIdempotencyService {
         hash,
         status,
         result.response,
-        resourceType,
-        result.resourceId,
+        { resourceType, resourceId: result.resourceId },
       );
       return result.response;
     });

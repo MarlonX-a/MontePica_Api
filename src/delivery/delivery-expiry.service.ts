@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   Injectable,
   Logger,
@@ -52,8 +53,8 @@ export class DeliveryExpiryService
       const rows: Array<{ id: string }> = await this.sweepFindPedido(
         this.records.manager,
       );
-      for (const row of rows) {
-        if (this.stopped) break;
+      await forEachSequential(rows, async (row) => {
+        if (this.stopped) return;
         try {
           await this.db.transaction(async (m) => {
             await this.operationalContext.lockTableOperations(m);
@@ -64,7 +65,7 @@ export class DeliveryExpiryService
             'No se pudo resolver un domicilio vencido; se reintentara.',
           );
         }
-      }
+      });
     } catch {
       this.logger.error(
         'No se pudo consultar domicilios vencidos; se reintentara.',

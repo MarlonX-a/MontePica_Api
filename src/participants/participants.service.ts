@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   ConflictException,
   Injectable,
@@ -108,50 +109,52 @@ export class ParticipantsService {
       { alias: dto.alias, qrToken: dto.qrToken },
       201,
       'participante',
-      (m) => this.authenticate(m, actor),
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const table = await this.operationalContext.lockActiveVisit(
-          m,
-          visitId,
-          zone,
-        );
-        if (!table.qrHash || table.qrHash !== hashAccessSecret(dto.qrToken))
-          throw new NotFoundException('QR vencido o inválido.');
-        await this.requestFindCliente(m, {
-          clientId: actor.clientId,
-        });
-        const duplicate = await this.requestFindParticipante(m, {
-          visitId,
-          clientId: actor.clientId,
-        });
-        if (duplicate.length)
-          throw new ConflictException(
-            'Ya existe una participación en esta visita.',
+      {
+        authorize: (m) => this.authenticate(m, actor),
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const table = await this.operationalContext.lockActiveVisit(
+            m,
+            visitId,
+            zone,
           );
-        const [p] = await this.requestInsertParticipante(m, {
-          visitId,
-          clientId: actor.clientId,
-          guestSessionId: actor.guestSessionId ?? null,
-          userId: actor.userId ?? null,
-          alias: dto.alias,
-          qrVersion: table.qrVersion,
-        });
-        const response = await this.getParticipant(m, p.id);
-        await this.auditLog.append(
-          m,
-          this.actor(actor),
-          'participante',
-          p.id,
-          'participant.requested',
-          {
+          if (!table.qrHash || table.qrHash !== hashAccessSecret(dto.qrToken))
+            throw new NotFoundException('QR vencido o inválido.');
+          await this.requestFindCliente(m, {
+            clientId: actor.clientId,
+          });
+          const duplicate = await this.requestFindParticipante(m, {
             visitId,
             clientId: actor.clientId,
+          });
+          if (duplicate.length)
+            throw new ConflictException(
+              'Ya existe una participación en esta visita.',
+            );
+          const [p] = await this.requestInsertParticipante(m, {
+            visitId,
+            clientId: actor.clientId,
+            guestSessionId: actor.guestSessionId ?? null,
+            userId: actor.userId ?? null,
             alias: dto.alias,
             qrVersion: table.qrVersion,
-          },
-        );
-        return { resourceId: p.id, response };
+          });
+          const response = await this.getParticipant(m, p.id);
+          await this.auditLog.append(
+            m,
+            this.actor(actor),
+            'participante',
+            p.id,
+            'participant.requested',
+            {
+              visitId,
+              clientId: actor.clientId,
+              alias: dto.alias,
+              qrVersion: table.qrVersion,
+            },
+          );
+          return { resourceId: p.id, response };
+        },
       },
     );
   }
@@ -214,97 +217,118 @@ export class ParticipantsService {
       { reason: reason ?? null },
       200,
       'participante',
-      auth,
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [ref] = await this.transitionFindParticipante(m, {
-          id,
-        });
-        if (!ref) throw new NotFoundException('Participación no encontrada.');
-        if (mode === 'approve')
-          await this.operationalContext.lockActiveVisit(m, ref.visitId, zone);
-        else await this.lockVisit(m, ref.visitId);
-        await this.requestFindCliente(m, {
-          clientId: ref.clientId,
-        });
-        const [p] = await this.transitionFindParticipanteNext(m, {
-          id,
-        });
-        if (mode === 'approve') {
-          if (p.estado !== 'pending')
-            throw new ConflictException('La solicitud ya no está pendiente.');
-          const [v] = await this.transitionFindVisitaMesa(m, {
-            visitId: ref.visitId,
+      {
+        authorize: auth,
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [ref] = await this.transitionFindParticipante(m, {
+            id,
           });
-          if (p.qr_version_aprobada !== v.version)
-            throw new ConflictException('El QR ha sido renovado.');
-          if (p.sesion_origen_id) {
-            const valid = await this.transitionFindSesionCliente(m, {
-              sesion_origen_id: p.sesion_origen_id,
-            });
-            if (!valid.length)
-              throw new ConflictException(
-                'La sesión invitada de origen ya no está vigente.',
-              );
-          }
-          const active = await this.transitionFindParticipanteNextNext(m, {
+          if (!ref) throw new NotFoundException('Participación no encontrada.');
+          if (mode === 'approve')
+            await this.operationalContext.lockActiveVisit(m, ref.visitId, zone);
+          else await this.lockVisit(m, ref.visitId);
+          await this.requestFindCliente(m, {
             clientId: ref.clientId,
           });
-          if (active.length)
-            throw new ConflictException(
-              'El cliente ya participa en otra mesa.',
-            );
-          await this.transitionUpdateParticipante(m, {
+          const [p] = await this.transitionFindParticipanteNext(m, {
             id,
-            userId: actor.userId,
           });
-          await this.transitionInsertCuentaConsumo(m, {
-            clientId: ref.clientId,
+          if (mode === 'approve')
+            await this.approveParticipation(m, { id, p, ref, actor });
+          else await this.finishParticipation(m, { id, p, mode, reason });
+          const response = await this.getParticipant(m, id, client?.clientId);
+          await this.auditLog.append(
+            m,
+            actor,
+            'participante',
             id,
-            dayId: v.dayId,
-          });
-        } else {
-          if (
-            (mode === 'reject' && p.estado !== 'pending') ||
-            (mode === 'finish' && p.estado !== 'approved') ||
-            (mode === 'leave' && !['pending', 'approved'].includes(p.estado))
-          )
-            throw new ConflictException(
-              'Transición de participación no permitida.',
-            );
-          const next =
-            mode === 'reject'
-              ? 'rejected'
-              : p.estado === 'pending'
-                ? 'cancelled'
-                : 'finished';
-          await this.rewards.releaseForParticipant(m, id);
-          if (next === 'finished')
-            await this.assertAccountsEmpty(m, 'participant', id);
-          await this.accountLifecycle.resolveParticipant(m, {
-            id,
-            next,
-            reason: reason ?? null,
-          });
-          if (next === 'finished')
-            await this.accountLifecycle.closeParticipantAccount(m, {
-              id,
-            });
-        }
-        const response = await this.getParticipant(m, id, client?.clientId);
-        await this.auditLog.append(
-          m,
-          actor,
-          'participante',
-          id,
-          `participant.${mode}`,
-          { before: p.estado, after: response.status, reason: reason ?? null },
-        );
-        return { resourceId: id, response };
+            `participant.${mode}`,
+            {
+              before: p.estado,
+              after: response.status,
+              reason: reason ?? null,
+            },
+          );
+          return { resourceId: id, response };
+        },
       },
     );
   }
 
+  private async approveParticipation(
+    m: EntityManager,
+    context: {
+      id: string;
+      p: TransitionFindParticipanteNextRow;
+      ref: TransitionFindParticipanteRow;
+      actor: TableActor;
+    },
+  ) {
+    const { id, p, ref, actor } = context;
+    if (p.estado !== 'pending')
+      throw new ConflictException('La solicitud ya no está pendiente.');
+    const [v] = await this.transitionFindVisitaMesa(m, {
+      visitId: ref.visitId,
+    });
+    if (p.qr_version_aprobada !== v.version)
+      throw new ConflictException('El QR ha sido renovado.');
+    if (p.sesion_origen_id) {
+      const valid = await this.transitionFindSesionCliente(m, {
+        sesion_origen_id: p.sesion_origen_id,
+      });
+      if (!valid.length)
+        throw new ConflictException(
+          'La sesión invitada de origen ya no está vigente.',
+        );
+    }
+    const active = await this.transitionFindParticipanteNextNext(m, {
+      clientId: ref.clientId,
+    });
+    if (active.length)
+      throw new ConflictException('El cliente ya participa en otra mesa.');
+    await this.transitionUpdateParticipante(m, {
+      id,
+      userId: actor.userId,
+    });
+    await this.transitionInsertCuentaConsumo(m, {
+      clientId: ref.clientId,
+      id,
+      dayId: v.dayId,
+    });
+  }
+  private async finishParticipation(
+    m: EntityManager,
+    context: {
+      id: string;
+      p: TransitionFindParticipanteNextRow;
+      mode: 'reject' | 'finish' | 'leave';
+      reason?: string;
+    },
+  ) {
+    const { id, p, mode, reason } = context;
+    if (
+      (mode === 'reject' && p.estado !== 'pending') ||
+      (mode === 'finish' && p.estado !== 'approved') ||
+      (mode === 'leave' && !['pending', 'approved'].includes(p.estado))
+    )
+      throw new ConflictException('Transición de participación no permitida.');
+    let next: 'cancelled' | 'finished' | 'rejected' =
+      p.estado === 'pending' ? 'cancelled' : 'finished';
+    if (mode === 'reject') next = 'rejected';
+    await this.rewards.releaseForParticipant(m, id);
+    if (next === 'finished')
+      await this.assertAccountsEmpty(m, 'participant', id);
+    await this.accountLifecycle.resolveParticipant(m, {
+      id,
+      next,
+      reason: reason ?? null,
+    });
+    if (next === 'finished')
+      await this.accountLifecycle.closeParticipantAccount(m, {
+        id,
+      });
+  }
   private async lockVisit(m: EntityManager, visitId: string) {
     const [ref] = await this.lockVisitFindVisitaMesa(m, {
       visitId,
@@ -330,33 +354,35 @@ export class ParticipantsService {
       {},
       200,
       'visita_mesa',
-      async () => {},
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const ref = await this.lockVisit(m, id);
-        const participants = await this.closeFindParticipante(m, {
-          id,
-        });
-        await this.rewards.releaseForVisit(m, id);
-        await this.assertAccountsEmpty(m, 'visit', id);
-        await this.accountLifecycle.closeVisitAccounts(m, { id });
-        await this.accountLifecycle.finishVisitParticipants(m, { id });
-        const [visit] = await this.closeUpdateVisitaMesa(m, {
-          id,
-          userId: actor.userId,
-        });
-        await this.closeUpdateMesa(m, { id_mesa: ref.id_mesa });
-        await this.auditLog.append(
-          m,
-          actor,
-          'visita_mesa',
-          id,
-          'visit.closed',
-          {
-            participants,
-          },
-        );
-        return { resourceId: id, response: visit };
+      {
+        authorize: async () => {},
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const ref = await this.lockVisit(m, id);
+          const participants = await this.closeFindParticipante(m, {
+            id,
+          });
+          await this.rewards.releaseForVisit(m, id);
+          await this.assertAccountsEmpty(m, 'visit', id);
+          await this.accountLifecycle.closeVisitAccounts(m, { id });
+          await this.accountLifecycle.finishVisitParticipants(m, { id });
+          const [visit] = await this.closeUpdateVisitaMesa(m, {
+            id,
+            userId: actor.userId,
+          });
+          await this.closeUpdateMesa(m, { id_mesa: ref.id_mesa });
+          await this.auditLog.append(
+            m,
+            actor,
+            'visita_mesa',
+            id,
+            'visit.closed',
+            {
+              participants,
+            },
+          );
+          return { resourceId: id, response: visit };
+        },
       },
     );
   }
@@ -385,7 +411,7 @@ export class ParticipantsService {
     });
     let cancelledParticipants = 0;
     let finishedParticipants = 0;
-    for (const visit of visits) {
+    await forEachSequential(visits, async (visit) => {
       await this.rewards.releaseForVisit(manager, visit.id);
       const participants = await this.closeFindParticipante(manager, {
         id: visit.id,
@@ -418,7 +444,7 @@ export class ParticipantsService {
         'visit.operating_day_closed',
         { operatingDayId: dayId, participants, visit: closed },
       );
-    }
+    });
     return {
       closedVisits: visits.length,
       cancelledParticipants,

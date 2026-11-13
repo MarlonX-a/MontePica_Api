@@ -1,3 +1,4 @@
+import { booleanQueryValue } from '../../common/dto/boolean-query.transform.js';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -40,9 +41,7 @@ export class ListInventoryQueryDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(({ value }) =>
-    value === 'true' ? true : value === 'false' ? false : value,
-  )
+  @Transform(({ value }) => booleanQueryValue(value))
   @IsBoolean()
   initialized?: boolean;
 }

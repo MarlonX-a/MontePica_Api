@@ -37,8 +37,7 @@ export class PointsLedgerService {
     const [p] = await this.recordConfirmedPaymentFindDetalleLiquidacion(m, {
       paymentId,
     });
-    if (!p || p.estado !== 'confirmed' || !p.id_cliente || !p.registered)
-      return;
+    if (p?.estado !== 'confirmed' || !p.id_cliente || !p.registered) return;
     const settings = await this.current(m);
     if (!settings.enabled) return;
     const cents = BigInt(p.products);

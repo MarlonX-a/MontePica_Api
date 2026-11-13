@@ -1,3 +1,4 @@
+import { forEachSequential } from '../src/common/async/for-each-sequential.js';
 import 'reflect-metadata';
 import { INestApplication, ServiceUnavailableException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -155,7 +156,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       tables = app.get(TablesService);
       visits = app.get(VisitsService);
       access = app.get(TableAccessService);
-      for (const role of ['admin', 'worker', 'client']) {
+      await forEachSequential(['admin', 'worker', 'client'], async (role) => {
         const [user] = await db.query(
           `INSERT INTO usuario (id_rol,correo_normalizado,password_hash)
         SELECT id_rol,$2,'test-unused-password-hash' FROM rol WHERE codigo=$1 RETURNING id_usuario`,
@@ -179,7 +180,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           sid: session.id_sesion_usuario,
           av: 0,
         });
-      }
+      });
       const [day] = await db.query(
         `INSERT INTO jornada_operativa (fecha_operativa,abierta_por)
       SELECT timezone(zona_horaria,clock_timestamp())::date,$1 FROM configuracion_operativa RETURNING id_jornada`,
@@ -338,32 +339,35 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     });
 
     it('starts command application contexts without HTTP or expiry tasks', async () => {
-      for (const kind of ['admin', 'seed', 'receipts'] as const) {
-        const context = await createCommandContext(kind);
-        try {
-          const connection = context.get(DataSource);
-          expect(connection).not.toBe(db);
-          const [current] = await connection.query(
-            'SELECT current_database() AS name',
-          );
-          expect(current.name).toBe(databaseName);
-          expect(() => context.get(DeliveryExpiryService)).toThrow();
-          expect(() => context.get(RedemptionExpiryService)).toThrow();
-          if (kind === 'admin') {
-            expect(
-              await context
-                .get(BootstrapService)
-                .countAdministrators(connection.manager),
-            ).toBe(1);
-          } else if (kind === 'seed') {
-            expect(context.get(CatalogSeedService)).toBeInstanceOf(
-              CatalogSeedService,
+      await forEachSequential(
+        ['admin', 'seed', 'receipts'] as const,
+        async (kind) => {
+          const context = await createCommandContext(kind);
+          try {
+            const connection = context.get(DataSource);
+            expect(connection).not.toBe(db);
+            const [current] = await connection.query(
+              'SELECT current_database() AS name',
             );
+            expect(current.name).toBe(databaseName);
+            expect(() => context.get(DeliveryExpiryService)).toThrow();
+            expect(() => context.get(RedemptionExpiryService)).toThrow();
+            if (kind === 'admin') {
+              expect(
+                await context
+                  .get(BootstrapService)
+                  .countAdministrators(connection.manager),
+              ).toBe(1);
+            } else if (kind === 'seed') {
+              expect(context.get(CatalogSeedService)).toBeInstanceOf(
+                CatalogSeedService,
+              );
+            }
+          } finally {
+            await context.close();
           }
-        } finally {
-          await context.close();
-        }
-      }
+        },
+      );
     });
 
     it('runs command services without overwriting catalog changes', async () => {
@@ -1114,34 +1118,34 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     });
 
     it('rejects invalid bodies and unknown properties', async () => {
-      for (const body of [
-        { name: ' ' },
-        { name: 12 },
-        { name: 'Valid', phone: null },
-        { name: 'Valid', clientId: randomUUID() },
-      ]) {
-        await request(http())
-          .post('/api/v1/guest-sessions')
-          .send(body)
-          .expect(400);
-      }
+      await forEachSequential(
+        [
+          { name: ' ' },
+          { name: 12 },
+          { name: 'Valid', phone: null },
+          { name: 'Valid', clientId: randomUUID() },
+        ],
+        async (body) => {
+          await request(http())
+            .post('/api/v1/guest-sessions')
+            .send(body)
+            .expect(400);
+        },
+      );
       await request(http())
         .post('/api/v1/admin/tables')
         .set('Authorization', auth(tokens.admin))
         .send({ code: 'M', extra: true })
         .expect(400);
-      for (const query of [
-        'page=0',
-        'page=abc',
-        'limit=101',
-        'limit=1.5',
-        'extra=x',
-      ]) {
-        await request(http())
-          .get(`/api/v1/admin/tables?${query}`)
-          .set('Authorization', auth(tokens.worker))
-          .expect(400);
-      }
+      await forEachSequential(
+        ['page=0', 'page=abc', 'limit=101', 'limit=1.5', 'extra=x'],
+        async (query) => {
+          await request(http())
+            .get(`/api/v1/admin/tables?${query}`)
+            .set('Authorization', auth(tokens.worker))
+            .expect(400);
+        },
+      );
       await request(http())
         .post('/api/v1/admin/tables/not-a-uuid/visits')
         .set('Authorization', auth(tokens.admin))
@@ -1163,7 +1167,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Authorization', auth(tokens.worker))
         .expect(201);
       const guest = await guests.create({ name: 'Guest' });
-      for (const token of [guest.token, tokens.client]) {
+      await forEachSequential([guest.token, tokens.client], async (token) => {
         const resolved = await request(http())
           .post('/api/v1/table-access/resolve')
           .set('Authorization', auth(token))
@@ -1175,7 +1179,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           tableCode: 'HTTP',
           qrVersion: qr.body.qrVersion,
         });
-      }
+      });
       await request(http())
         .post('/api/v1/table-access/resolve')
         .send({ qrToken: qr.body.qrToken })
@@ -1303,36 +1307,41 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     it('rejects inactive tables, closed days and stale business dates', async () => {
       const { table, visit, qr } = await fixture();
       const guest = await guests.create({ name: 'Operational' });
-      for (const mutate of [
-        () =>
-          db.query('UPDATE mesa SET activa=false WHERE id_mesa=$1', [table.id]),
-        () =>
-          db.query(
-            `UPDATE jornada_operativa SET fecha_operativa=fecha_operativa-1 WHERE id_jornada=$1`,
-            [dayId],
-          ),
-      ]) {
-        await mutate();
-        try {
-          await request(http())
-            .post('/api/v1/table-access/resolve')
-            .set('Authorization', auth(guest.token))
-            .send({ qrToken: qr.qrToken })
-            .expect(409);
-          await request(http())
-            .post(`/api/v1/admin/visits/${visit.id}/qr`)
-            .set('Authorization', auth(tokens.admin))
-            .expect(409);
-        } finally {
-          await db.query('UPDATE mesa SET activa=true WHERE id_mesa=$1', [
-            table.id,
-          ]);
-          await db.query(
-            `UPDATE jornada_operativa SET fecha_operativa=timezone('America/Guayaquil',clock_timestamp())::date WHERE id_jornada=$1`,
-            [dayId],
-          );
-        }
-      }
+      await forEachSequential(
+        [
+          () =>
+            db.query('UPDATE mesa SET activa=false WHERE id_mesa=$1', [
+              table.id,
+            ]),
+          () =>
+            db.query(
+              `UPDATE jornada_operativa SET fecha_operativa=fecha_operativa-1 WHERE id_jornada=$1`,
+              [dayId],
+            ),
+        ],
+        async (mutate) => {
+          await mutate();
+          try {
+            await request(http())
+              .post('/api/v1/table-access/resolve')
+              .set('Authorization', auth(guest.token))
+              .send({ qrToken: qr.qrToken })
+              .expect(409);
+            await request(http())
+              .post(`/api/v1/admin/visits/${visit.id}/qr`)
+              .set('Authorization', auth(tokens.admin))
+              .expect(409);
+          } finally {
+            await db.query('UPDATE mesa SET activa=true WHERE id_mesa=$1', [
+              table.id,
+            ]);
+            await db.query(
+              `UPDATE jornada_operativa SET fecha_operativa=timezone('America/Guayaquil',clock_timestamp())::date WHERE id_jornada=$1`,
+              [dayId],
+            );
+          }
+        },
+      );
       await db.query(
         `UPDATE visita_mesa SET estado='closed',cerrada_en=now(),cerrada_por=$2 WHERE id_visita=$1`,
         [visit.id, users.admin],
@@ -1621,12 +1630,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         ),
       );
       expect(approvals.map((r) => r.status).sort()).toEqual([200, 409]);
-      for (const f of [a, b])
+      await forEachSequential([a, b], async (f) => {
         await request(http())
           .post(`/api/v1/admin/visits/${f.visit.id}/close`)
           .set('Authorization', auth(tokens.admin))
           .set('Idempotency-Key', `close-${f.visit.id}`)
           .expect(200);
+      });
     });
 
     it('rolls back approval and account creation if audit fails', async () => {
@@ -1740,7 +1750,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     });
 
     it('serializes approval against QR rotation and visit closure', async () => {
-      for (const competingAction of ['qr', 'close']) {
+      await forEachSequential(['qr', 'close'], async (competingAction) => {
         const f = await fixture();
         const guest = await guests.create({ name: 'Concurrent' });
         const p = await request(http())
@@ -1775,7 +1785,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
             .set('Idempotency-Key', 'after-rotation')
             .expect(200);
         }
-      }
+      });
     });
 
     it('finishes and closes visits from previous operating dates', async () => {
@@ -1906,13 +1916,16 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         { 'client-token': [] },
       ]);
       let limited = 0;
-      for (let i = 0; i < 11; i++) {
-        const response = await request(http())
-          .post('/api/v1/guest-sessions')
-          .send({ name: 'Rate test' });
-        expect([201, 429]).toContain(response.status);
-        if (response.status === 429) limited++;
-      }
+      await forEachSequential(
+        Array.from({ length: 11 }, (_, index) => index),
+        async () => {
+          const response = await request(http())
+            .post('/api/v1/guest-sessions')
+            .send({ name: 'Rate test' });
+          expect([201, 429]).toContain(response.status);
+          if (response.status === 429) limited++;
+        },
+      );
       expect(limited).toBeGreaterThan(0);
     });
     it('serializes cash collection against cancellation without duplicate income', async () => {
@@ -1938,13 +1951,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'payment-race-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      for (const action of ['start-preparation', 'ready', 'deliver'])
-        await request(http())
-          .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `payment-race-${action}`)
-          .send({ expectedVersion: 1 })
-          .expect(200);
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `payment-race-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2002,13 +2019,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'transfer-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      for (const action of ['start-preparation', 'ready', 'deliver'])
-        await request(http())
-          .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `transfer-${action}`)
-          .send({ expectedVersion: 1 })
-          .expect(200);
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `transfer-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2158,13 +2179,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'transfer-dup-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      for (const action of ['start-preparation', 'ready', 'deliver'])
-        await request(http())
-          .post(`/api/v1/admin/orders/${o2.body.id}/${action}`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `transfer-dup-${action}`)
-          .send({ expectedVersion: 1 })
-          .expect(200);
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${o2.body.id}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `transfer-dup-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
       const s2 = await request(http())
         .post(`/api/v1/admin/accounts/${o2.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2217,13 +2242,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'zero-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      for (const action of ['start-preparation', 'ready', 'deliver'])
-        await request(http())
-          .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `zero-${action}`)
-          .send({ expectedVersion: 1 })
-          .expect(200);
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `zero-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2313,13 +2342,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'unfinished-settlement')
         .send({})
         .expect(409);
-      for (const action of ['start-preparation', 'ready', 'deliver'])
-        await request(http())
-          .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `registered-${action}`)
-          .send({ expectedVersion: 1 })
-          .expect(200);
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `registered-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
       const result = await request(http())
         .post(`/api/v1/admin/accounts/${accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2475,13 +2508,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'registered-transfer-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      for (const action of ['start-preparation', 'ready', 'deliver'])
-        await request(http())
-          .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `registered-transfer-${action}`)
-          .send({ expectedVersion: 1 })
-          .expect(200);
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `registered-transfer-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2909,26 +2946,29 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       expect(expired.estado).toBe('cancelled');
 
       const competing: string[] = [];
-      for (let n = 0; n < 2; n++) {
-        const r = await request(http())
-          .post('/api/v1/me/delivery-requests')
-          .set('Authorization', auth(tokens.client))
-          .set('Idempotency-Key', `8b-stock-request-${n}`)
-          .send({
-            configurationVersion: freeSettings.body.version,
-            recipientName: 'Cliente',
-            phone: '099',
-            address: 'Direccion',
-          })
-          .expect(201);
-        await request(http())
-          .post(`/api/v1/admin/delivery-requests/${r.body.id}/approve`)
-          .set('Authorization', auth(tokens.worker))
-          .set('Idempotency-Key', `8b-stock-approve-${n}`)
-          .send({})
-          .expect(200);
-        competing.push(r.body.id);
-      }
+      await forEachSequential(
+        Array.from({ length: 2 }, (_, index) => index),
+        async (n) => {
+          const r = await request(http())
+            .post('/api/v1/me/delivery-requests')
+            .set('Authorization', auth(tokens.client))
+            .set('Idempotency-Key', `8b-stock-request-${n}`)
+            .send({
+              configurationVersion: freeSettings.body.version,
+              recipientName: 'Cliente',
+              phone: '099',
+              address: 'Direccion',
+            })
+            .expect(201);
+          await request(http())
+            .post(`/api/v1/admin/delivery-requests/${r.body.id}/approve`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `8b-stock-approve-${n}`)
+            .send({})
+            .expect(200);
+          competing.push(r.body.id);
+        },
+      );
       const race = await Promise.all(
         competing.map((id, n) =>
           request(http())
@@ -4146,22 +4186,17 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         `INSERT INTO caja(id_jornada,monto_inicial_ctvs,abierta_por) VALUES($1,0,$2) RETURNING id_caja id`,
         [exactDay.id, users.admin],
       );
-      for (const countedCents of [
-        null,
-        false,
-        '',
-        '0',
-        -1,
-        0.5,
-        Number.MAX_SAFE_INTEGER + 1,
-      ]) {
-        await request(http())
-          .post(`/api/v1/admin/operations/cash/${exactCash.id}/close`)
-          .set('Authorization', auth(tokens.admin))
-          .set('Idempotency-Key', '11a-invalid-count')
-          .send({ countedCents })
-          .expect(400);
-      }
+      await forEachSequential(
+        [null, false, '', '0', -1, 0.5, Number.MAX_SAFE_INTEGER + 1],
+        async (countedCents) => {
+          await request(http())
+            .post(`/api/v1/admin/operations/cash/${exactCash.id}/close`)
+            .set('Authorization', auth(tokens.admin))
+            .set('Idempotency-Key', '11a-invalid-count')
+            .send({ countedCents })
+            .expect(400);
+        },
+      );
       await request(http())
         .post(`/api/v1/admin/operations/cash/${exactCash.id}/close`)
         .set('Authorization', auth(tokens.admin))
@@ -4426,7 +4461,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         'Etc/GMT-12',
       ];
       let selectedZone: string | undefined;
-      for (const zone of zones) {
+      await forEachSequential(zones, async (zone) => {
+        if (selectedZone) return;
         const [candidate] = await db.query(
           `SELECT timezone($1,clock_timestamp())::date::text AS date`,
           [zone],
@@ -4437,9 +4473,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         );
         if (!existing) {
           selectedZone = zone;
-          break;
         }
-      }
+      });
       expect(selectedZone).toBeDefined();
       const [previousDate] = await db.query(
         `SELECT ($1::date-n)::text AS date FROM generate_series(1,1000) AS days(n)

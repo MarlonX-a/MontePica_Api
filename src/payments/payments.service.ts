@@ -86,115 +86,116 @@ export class PaymentsService {
       zero ? {} : { receivedCents },
       zero ? 200 : 201,
       'liquidacion',
-      (m) => this.authorize(m, actor),
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [ref] = await this.collectFindLiquidacion(m, {
-          id,
-        });
-        if (!ref) throw new NotFoundException('Liquidación no encontrada.');
-        if (ref.modalidad === 'delivery')
-          throw new ConflictException(
-            'Los domicilios requieren transferencia.',
-          );
-        const [cash] = await this.collectFindCaja(m, {
-          id_caja: ref.id_caja,
-          zone,
-        });
-        if (
-          !cash ||
-          cash.estado !== 'open' ||
-          cash.day_status !== 'open' ||
-          !cash.current
-        )
-          throw new ConflictException(
-            'La caja debe estar abierta en la jornada actual.',
-          );
-        await this.collectFindVisitaMesa(m, {
-          id_visita: ref.id_visita,
-        });
-        const [participant] = await this.collectFindParticipante(m, {
-          id_participante: ref.id_participante,
-        });
-        const [account] = await this.collectFindCuentaConsumo(m, {
-          id_cuenta: ref.id_cuenta,
-        });
-        const [settlement] = await this.collectFindLiquidacionNext(m, {
-          id,
-        });
-        if (
-          settlement.estado !== 'pending' ||
-          account.estado !== 'open' ||
-          participant.estado !== 'approved'
-        )
-          throw new ConflictException(
-            'La liquidación, cuenta o participación ya no están disponibles.',
-          );
-        const [pendingTransfer] = await this.collectFindPago(m, {
-          id,
-        });
-        if (pendingTransfer)
-          throw new ConflictException(
-            'Existe una transferencia pendiente de verificación.',
-          );
-        if (
-          !Number.isSafeInteger(settlement.total) ||
-          (zero
-            ? settlement.total !== 0
-            : settlement.total <= 0 || receivedCents! < settlement.total)
-        )
-          throw new ConflictException(
-            'Importe insuficiente o liquidación incompatible.',
-          );
-        let payment = null;
-        if (!zero) {
-          const [created] = await this.collectInsertPago(m, {
+      {
+        authorize: (m) => this.authorize(m, actor),
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [ref] = await this.collectFindLiquidacion(m, {
             id,
-            total: settlement.total,
-            receivedCents,
-            changeCents: receivedCents! - settlement.total,
-            userId: actor.userId,
           });
-          await this.collectInsertHistorialPago(m, {
-            id: created.id,
-            userId: actor.userId,
+          if (!ref) throw new NotFoundException('Liquidación no encontrada.');
+          if (ref.modalidad === 'delivery')
+            throw new ConflictException(
+              'Los domicilios requieren transferencia.',
+            );
+          const [cash] = await this.collectFindCaja(m, {
+            id_caja: ref.id_caja,
+            zone,
           });
-          await this.points.recordConfirmedPayment(m, created.id);
-          payment = await this.detail(created.id, undefined, true, m);
-        }
-        await this.collectUpdateLiquidacion(m, {
-          id,
-          userId: actor.userId,
-          resolution: zero ? 'zeroTotal' : 'cash',
-        });
-        await this.accountLifecycle.closeAccount(m, {
-          id_cuenta: ref.id_cuenta,
-        });
-        await this.rewards.releaseForParticipant(m, ref.id_participante);
-        await this.accountLifecycle.finishParticipant(m, {
-          id_participante: ref.id_participante,
-        });
-        await this.auditLog.append(
-          m,
-          { userId: actor.userId },
-          'liquidacion',
-          id,
-          zero ? 'settlement.zero_completed' : 'payment.confirmed',
-          {
-            paymentId: payment?.id ?? null,
-            accountId: ref.id_cuenta,
-            totalCents: settlement.total,
-          },
-        );
-        return {
-          resourceId: id,
-          response: {
-            payment,
-            settlement: { id, status: 'settled' },
-            account: { id: ref.id_cuenta, status: 'closed' },
-            participant: { id: ref.id_participante, status: 'finished' },
-          },
-        };
+          if (
+            cash?.estado !== 'open' ||
+            cash.day_status !== 'open' ||
+            !cash.current
+          )
+            throw new ConflictException(
+              'La caja debe estar abierta en la jornada actual.',
+            );
+          await this.collectFindVisitaMesa(m, {
+            id_visita: ref.id_visita,
+          });
+          const [participant] = await this.collectFindParticipante(m, {
+            id_participante: ref.id_participante,
+          });
+          const [account] = await this.collectFindCuentaConsumo(m, {
+            id_cuenta: ref.id_cuenta,
+          });
+          const [settlement] = await this.collectFindLiquidacionNext(m, {
+            id,
+          });
+          if (
+            settlement.estado !== 'pending' ||
+            account.estado !== 'open' ||
+            participant.estado !== 'approved'
+          )
+            throw new ConflictException(
+              'La liquidación, cuenta o participación ya no están disponibles.',
+            );
+          const [pendingTransfer] = await this.collectFindPago(m, {
+            id,
+          });
+          if (pendingTransfer)
+            throw new ConflictException(
+              'Existe una transferencia pendiente de verificación.',
+            );
+          if (
+            !Number.isSafeInteger(settlement.total) ||
+            (zero
+              ? settlement.total !== 0
+              : settlement.total <= 0 || receivedCents! < settlement.total)
+          )
+            throw new ConflictException(
+              'Importe insuficiente o liquidación incompatible.',
+            );
+          let payment = null;
+          if (!zero) {
+            const [created] = await this.collectInsertPago(m, {
+              id,
+              total: settlement.total,
+              receivedCents,
+              changeCents: receivedCents! - settlement.total,
+              userId: actor.userId,
+            });
+            await this.collectInsertHistorialPago(m, {
+              id: created.id,
+              userId: actor.userId,
+            });
+            await this.points.recordConfirmedPayment(m, created.id);
+            payment = await this.detail(created.id, undefined, true, m);
+          }
+          await this.collectUpdateLiquidacion(m, {
+            id,
+            userId: actor.userId,
+            resolution: zero ? 'zeroTotal' : 'cash',
+          });
+          await this.accountLifecycle.closeAccount(m, {
+            id_cuenta: ref.id_cuenta,
+          });
+          await this.rewards.releaseForParticipant(m, ref.id_participante);
+          await this.accountLifecycle.finishParticipant(m, {
+            id_participante: ref.id_participante,
+          });
+          await this.auditLog.append(
+            m,
+            { userId: actor.userId },
+            'liquidacion',
+            id,
+            zero ? 'settlement.zero_completed' : 'payment.confirmed',
+            {
+              paymentId: payment?.id ?? null,
+              accountId: ref.id_cuenta,
+              totalCents: settlement.total,
+            },
+          );
+          return {
+            resourceId: id,
+            response: {
+              payment,
+              settlement: { id, status: 'settled' },
+              account: { id: ref.id_cuenta, status: 'closed' },
+              participant: { id: ref.id_participante, status: 'finished' },
+            },
+          };
+        },
       },
     );
   }

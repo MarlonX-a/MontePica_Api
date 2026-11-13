@@ -47,9 +47,9 @@ export class IdempotencyRecordsService {
     hash: string,
     status: number,
     response: unknown,
-    resourceType: string,
-    resourceId: string,
+    resource: { resourceType: string; resourceId: string },
   ): Promise<void> {
+    const { resourceType, resourceId } = resource;
     await manager
       .getRepository(IdempotencyRecord)
       .createQueryBuilder()

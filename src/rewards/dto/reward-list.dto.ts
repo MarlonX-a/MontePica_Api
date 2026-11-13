@@ -1,3 +1,4 @@
+import { booleanQueryValue } from '../../common/dto/boolean-query.transform.js';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -35,9 +36,7 @@ export class RewardListDto {
   search?: string;
   @ValidateIf((_o, v) => v !== undefined)
   @ApiPropertyOptional()
-  @Transform(({ value }) =>
-    value === 'true' ? true : value === 'false' ? false : value,
-  )
+  @Transform(({ value }) => booleanQueryValue(value))
   @IsBoolean()
   active?: boolean;
   @ValidateIf((_o, v) => v !== undefined)

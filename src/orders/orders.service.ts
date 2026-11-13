@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   BadRequestException,
   ConflictException,
@@ -81,128 +82,85 @@ export class OrdersService {
       dto,
       201,
       'pedido',
-      async (m) => {
-        await this.participants.authenticate(m, client);
-        const [own] = await this.createFindParticipante(m, {
-          visitId,
-          clientId: client.clientId,
-        });
-        if (!own) throw new NotFoundException('Participación no encontrada.');
-      },
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        await this.operationalContext.lockActiveVisit(m, visitId, zone);
-        const [account] = await this.createFindParticipanteNext(m, {
-          visitId,
-          clientId: client.clientId,
-        });
-        if (!account)
-          throw new ConflictException(
-            'Se requiere una participación aprobada y cuenta abierta.',
-          );
-        const [cash] = await this.createFindCaja(m, {
-          day: account.day,
-        });
-        if (cash?.estado === 'closed')
-          throw new ConflictException('La caja de la jornada ya fue cerrada.');
-        const [pending] = await this.editFindLiquidacion(m, {
-          id_cuenta: account.id,
-        });
-        if (pending)
-          throw new ConflictException(
-            'La cuenta tiene una liquidación pendiente.',
-          );
-        const products: Array<{ id: string; price: number; tracks: boolean }> =
-          await this.inventoryOperations.lockAvailableProducts(m, {
-            productIds: ids,
+      {
+        authorize: async (m) => {
+          await this.participants.authenticate(m, client);
+          const [own] = await this.createFindParticipante(m, {
+            visitId,
+            clientId: client.clientId,
           });
-        if (products.length !== ids.length)
-          throw new ConflictException(
-            'Uno o más productos no están disponibles.',
-          );
-        const inventory: Array<{
-          id: string;
-          product: string;
-          available: number;
-        }> = await this.inventoryOperations.lockAvailableInventory(m, {
-          operatingDayId: account.day,
-          productIds: ids,
-        });
-        let total = 0;
-        for (const item of dto.items) {
-          const product = products.find(
-            (p) => p.id === item.productId.toLowerCase(),
-          )!;
-          const stock = inventory.find((i) => i.product === product.id);
-          if (product.tracks && (!stock || stock.available < item.quantity))
+          if (!own) throw new NotFoundException('Participación no encontrada.');
+        },
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          await this.operationalContext.lockActiveVisit(m, visitId, zone);
+          const [account] = await this.createFindParticipanteNext(m, {
+            visitId,
+            clientId: client.clientId,
+          });
+          if (!account)
             throw new ConflictException(
-              'Inventario insuficiente o sin inicializar.',
+              'Se requiere una participación aprobada y cuenta abierta.',
             );
-          total += product.price * item.quantity;
-        }
-        if (!Number.isSafeInteger(total))
-          throw new ConflictException('El total supera el límite permitido.');
-        const [order] = await this.createInsertPedido(m, {
-          day: account.day,
-          visitId,
-          id: account.id,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-        });
-        const [version] = await this.createInsertVersionPedido(m, {
-          id: order.id,
-          total,
-          notes: dto.notes ?? null,
-        });
-        for (const item of dto.items) {
-          const product = products.find(
-            (p) => p.id === item.productId.toLowerCase(),
-          )!;
-          const [detail] = await this.editInsertDetallePedido(m, {
-            id: version.id,
-            id2: product.id,
-            quantity: item.quantity,
-            price: product.price,
-            tracks: product.tracks,
-            notes: item.notes ?? null,
+          const [cash] = await this.createFindCaja(m, {
+            day: account.day,
           });
-          await this.createInsertAsignacionConsumo(m, {
-            id: detail.id,
-            id2: account.id,
-            quantity: item.quantity,
+          if (cash?.estado === 'closed')
+            throw new ConflictException(
+              'La caja de la jornada ya fue cerrada.',
+            );
+          const [pending] = await this.editFindLiquidacion(m, {
+            id_cuenta: account.id,
           });
-          if (product.tracks) {
-            const stock = inventory.find((i) => i.product === product.id)!;
-            await this.inventoryOperations.increaseReservedQuantity(m, {
-              inventoryId: stock.id,
-              quantity: item.quantity,
-            });
-            await this.inventoryOperations.createReservation(m, {
-              orderItemId: detail.id,
-              inventoryId: stock.id,
-              quantity: item.quantity,
-            });
-          }
-        }
-        await this.createInsertHistorialPedido(m, {
-          id: order.id,
-          versionId: version.id,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-          actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
-        });
-        await this.auditLog.append(
-          m,
-          actor,
-          'pedido',
-          order.id,
-          'order.submitted',
-          { visitId, accountId: account.id, totalCents: total },
-        );
-        return {
-          resourceId: order.id,
-          response: await this.detail(order.id, client.clientId, false, m),
-        };
+          if (pending)
+            throw new ConflictException(
+              'La cuenta tiene una liquidación pendiente.',
+            );
+          const { products, inventory, total } = await this.prepareOrderItems(
+            m,
+            account.day,
+            ids,
+            dto,
+          );
+          const [order] = await this.createInsertPedido(m, {
+            day: account.day,
+            visitId,
+            id: account.id,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+          });
+          const [version] = await this.createInsertVersionPedido(m, {
+            id: order.id,
+            total,
+            notes: dto.notes ?? null,
+          });
+          await this.persistOrderItems(m, {
+            dto,
+            products,
+            inventory,
+            versionId: version.id,
+            accountId: account.id,
+          });
+          await this.createInsertHistorialPedido(m, {
+            id: order.id,
+            versionId: version.id,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+            actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
+          });
+          await this.auditLog.append(
+            m,
+            actor,
+            'pedido',
+            order.id,
+            'order.submitted',
+            { visitId, accountId: account.id, totalCents: total },
+          );
+          return {
+            resourceId: order.id,
+            response: await this.detail(order.id, client.clientId, false, m),
+          };
+        },
       },
     );
   }
@@ -226,170 +184,206 @@ export class OrdersService {
       dto,
       201,
       'pedido',
-      async (m) => {
-        await this.participants.authenticate(m, client);
-        const [own] = await this.createDeliveryFindSolicitudDomicilio(m, {
-          requestId,
-          clientId: client.clientId,
-        });
-        if (!own) throw new NotFoundException('Solicitud no encontrada.');
-      },
-      async (m) => {
-        if (!this.config.get<boolean>('TRANSFER_PAYMENTS_ENABLED', false))
-          throw new ServiceUnavailableException(
-            'Las transferencias están deshabilitadas.',
-          );
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [day] = await this.createDeliveryFindJornadaOperativa(m, {
-          zone,
-        });
-        if (!day)
-          throw new ConflictException(
-            'Se requiere jornada y caja actuales abiertas.',
-          );
-        const [request] = await this.createDeliveryFindSolicitudDomicilioNext(
-          m,
-          {
+      {
+        authorize: async (m) => {
+          await this.participants.authenticate(m, client);
+          const [own] = await this.createDeliveryFindSolicitudDomicilio(m, {
             requestId,
-          },
-        );
-        const [settings] = await this.createDeliveryFindConfigDomicilio(m);
-        const [used] = await this.createDeliveryFindEntregaDomicilio(m, {
-          requestId,
-        });
-        if (
-          used ||
-          request.estado !== 'approved' ||
-          request.id_jornada !== day.id ||
-          !settings.habilitado ||
-          settings.version !== request.version
-        )
-          throw new ConflictException(
-            'La solicitud no está disponible para un pedido.',
-          );
-        const [account] = await this.createDeliveryInsertCuentaConsumo(m, {
-          clientId: client.clientId,
-          id: day.id,
-        });
-        const products: Array<{ id: string; price: number; tracks: boolean }> =
-          await this.inventoryOperations.lockAvailableProducts(m, {
-            productIds: ids,
+            clientId: client.clientId,
           });
-        if (products.length !== ids.length)
-          throw new ConflictException(
-            'Uno o más productos no están disponibles.',
-          );
-        const inventory: Array<{
-          id: string;
-          product: string;
-          available: number;
-        }> = await this.inventoryOperations.lockAvailableInventory(m, {
-          operatingDayId: account.day,
-          productIds: ids,
-        });
-        let total = 0;
-        for (const item of dto.items) {
-          const product = products.find(
-            (p) => p.id === item.productId.toLowerCase(),
-          )!;
-          const stock = inventory.find((i) => i.product === product.id);
-          if (product.tracks && (!stock || stock.available < item.quantity))
-            throw new ConflictException(
-              'Inventario insuficiente o sin inicializar.',
+          if (!own) throw new NotFoundException('Solicitud no encontrada.');
+        },
+        action: async (m) => {
+          if (!this.config.get<boolean>('TRANSFER_PAYMENTS_ENABLED', false))
+            throw new ServiceUnavailableException(
+              'Las transferencias están deshabilitadas.',
             );
-          total += product.price * item.quantity;
-        }
-        if (!Number.isSafeInteger(total))
-          throw new ConflictException('El total supera el límite permitido.');
-        const shipping = Number(request.tarifa_ctvs);
-        if (!Number.isSafeInteger(total + shipping) || total + shipping <= 0)
-          throw new ConflictException('El total debe ser positivo y seguro.');
-        const [order] = await this.createDeliveryInsertPedido(m, {
-          id: day.id,
-          id2: account.id,
-          userId: client.userId,
-        });
-        await this.createDeliveryInsertEntregaDomicilio(m, {
-          id: order.id,
-          requestId,
-          version: request.version,
-          comprobante_plazo_seg: settings.comprobante_plazo_seg,
-        });
-        const [version] = await this.createInsertVersionPedido(m, {
-          id: order.id,
-          total,
-          notes: dto.notes ?? null,
-        });
-        for (const item of dto.items) {
-          const product = products.find(
-            (p) => p.id === item.productId.toLowerCase(),
-          )!;
-          const [detail] = await this.editInsertDetallePedido(m, {
-            id: version.id,
-            id2: product.id,
-            quantity: item.quantity,
-            price: product.price,
-            tracks: product.tracks,
-            notes: item.notes ?? null,
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [day] = await this.createDeliveryFindJornadaOperativa(m, {
+            zone,
           });
-          await this.createInsertAsignacionConsumo(m, {
-            id: detail.id,
-            id2: account.id,
-            quantity: item.quantity,
-          });
-          if (product.tracks) {
-            const stock = inventory.find((i) => i.product === product.id)!;
-            await this.inventoryOperations.increaseReservedQuantity(m, {
-              inventoryId: stock.id,
-              quantity: item.quantity,
-            });
-            await this.inventoryOperations.createReservation(m, {
-              orderItemId: detail.id,
-              inventoryId: stock.id,
-              quantity: item.quantity,
-            });
-          }
-        }
-        await this.createInsertHistorialPedido(m, {
-          id: order.id,
-          versionId: version.id,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-          actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
-        });
-        const [bill] = await this.createDeliveryInsertLiquidacion(m, {
-          id: account.id,
-          cash: day.cash,
-          total,
-          shipping,
-          total5: total + shipping,
-          userId: client.userId,
-        });
-        await this.createDeliveryInsertDetalleLiquidacion(m, {
-          id: bill.id,
-          id2: account.id,
-        });
-        await this.auditLog.append(
-          m,
-          actor,
-          'pedido',
-          order.id,
-          'delivery.order_submitted',
-          {
+          if (!day)
+            throw new ConflictException(
+              'Se requiere jornada y caja actuales abiertas.',
+            );
+          const [request] = await this.createDeliveryFindSolicitudDomicilioNext(
+            m,
+            {
+              requestId,
+            },
+          );
+          const [settings] = await this.createDeliveryFindConfigDomicilio(m);
+          const [used] = await this.createDeliveryFindEntregaDomicilio(m, {
             requestId,
+          });
+          if (
+            used ||
+            request.estado !== 'approved' ||
+            request.id_jornada !== day.id ||
+            !settings.habilitado ||
+            settings.version !== request.version
+          )
+            throw new ConflictException(
+              'La solicitud no está disponible para un pedido.',
+            );
+          const [account] = await this.createDeliveryInsertCuentaConsumo(m, {
+            clientId: client.clientId,
+            id: day.id,
+          });
+          const { products, inventory, total } = await this.prepareOrderItems(
+            m,
+            account.day,
+            ids,
+            dto,
+          );
+          const shipping = Number(request.tarifa_ctvs);
+          if (!Number.isSafeInteger(total + shipping) || total + shipping <= 0)
+            throw new ConflictException('El total debe ser positivo y seguro.');
+          const [order] = await this.createDeliveryInsertPedido(m, {
+            id: day.id,
+            id2: account.id,
+            userId: client.userId,
+          });
+          await this.createDeliveryInsertEntregaDomicilio(m, {
+            id: order.id,
+            requestId,
+            version: request.version,
+            comprobante_plazo_seg: settings.comprobante_plazo_seg,
+          });
+          const [version] = await this.createInsertVersionPedido(m, {
+            id: order.id,
+            total,
+            notes: dto.notes ?? null,
+          });
+          await this.persistOrderItems(m, {
+            dto,
+            products,
+            inventory,
+            versionId: version.id,
             accountId: account.id,
-            settlementId: bill.id,
-            totalCents: total + shipping,
-          },
-        );
-        return {
-          resourceId: order.id,
-          response: await this.detail(order.id, client.clientId, false, m),
-        };
+          });
+          await this.createInsertHistorialPedido(m, {
+            id: order.id,
+            versionId: version.id,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+            actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
+          });
+          const [bill] = await this.createDeliveryInsertLiquidacion(m, {
+            id: account.id,
+            cash: day.cash,
+            total,
+            shipping,
+            total5: total + shipping,
+            userId: client.userId,
+          });
+          await this.createDeliveryInsertDetalleLiquidacion(m, {
+            id: bill.id,
+            id2: account.id,
+          });
+          await this.auditLog.append(
+            m,
+            actor,
+            'pedido',
+            order.id,
+            'delivery.order_submitted',
+            {
+              requestId,
+              accountId: account.id,
+              settlementId: bill.id,
+              totalCents: total + shipping,
+            },
+          );
+          return {
+            resourceId: order.id,
+            response: await this.detail(order.id, client.clientId, false, m),
+          };
+        },
       },
     );
   }
 
+  private async prepareOrderItems(
+    m: EntityManager,
+    day: string,
+    ids: string[],
+    dto: CreateOrderDto,
+  ) {
+    const products: Array<{
+      id: string;
+      price: number;
+      tracks: boolean;
+    }> = await this.inventoryOperations.lockAvailableProducts(m, {
+      productIds: ids,
+    });
+    if (products.length !== ids.length)
+      throw new ConflictException('Uno o más productos no están disponibles.');
+    const inventory: Array<{
+      id: string;
+      product: string;
+      available: number;
+    }> = await this.inventoryOperations.lockAvailableInventory(m, {
+      operatingDayId: day,
+      productIds: ids,
+    });
+    let total = 0;
+    for (const item of dto.items) {
+      const product = products.find(
+        (p) => p.id === item.productId.toLowerCase(),
+      )!;
+      const stock = inventory.find((i) => i.product === product.id);
+      if (product.tracks && (!stock || stock.available < item.quantity))
+        throw new ConflictException(
+          'Inventario insuficiente o sin inicializar.',
+        );
+      total += product.price * item.quantity;
+    }
+    if (!Number.isSafeInteger(total))
+      throw new ConflictException('El total supera el límite permitido.');
+    return { products, inventory, total };
+  }
+  private async persistOrderItems(
+    m: EntityManager,
+    context: {
+      dto: CreateOrderDto;
+      products: Array<{ id: string; price: number; tracks: boolean }>;
+      inventory: Array<{ id: string; product: string; available: number }>;
+      versionId: string;
+      accountId: string;
+    },
+  ) {
+    const { dto, products, inventory, versionId, accountId } = context;
+    await forEachSequential(dto.items, async (item) => {
+      const product = products.find(
+        (p) => p.id === item.productId.toLowerCase(),
+      )!;
+      const [detail] = await this.editInsertDetallePedido(m, {
+        id: versionId,
+        id2: product.id,
+        quantity: item.quantity,
+        price: product.price,
+        tracks: product.tracks,
+        notes: item.notes ?? null,
+      });
+      await this.createInsertAsignacionConsumo(m, {
+        id: detail.id,
+        id2: accountId,
+        quantity: item.quantity,
+      });
+      if (product.tracks) {
+        const stock = inventory.find((i) => i.product === product.id)!;
+        await this.inventoryOperations.increaseReservedQuantity(m, {
+          inventoryId: stock.id,
+          quantity: item.quantity,
+        });
+        await this.inventoryOperations.createReservation(m, {
+          orderItemId: detail.id,
+          inventoryId: stock.id,
+          quantity: item.quantity,
+        });
+      }
+    });
+  }
   async detail(
     id: string,
     clientId?: string,

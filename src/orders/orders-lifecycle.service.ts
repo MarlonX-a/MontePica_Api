@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   ConflictException,
   ForbiddenException,
@@ -45,6 +46,15 @@ import {
   TransitionFindUsuarioRow,
 } from './types/orders.types.js';
 
+type TransitionContext = {
+  order: TransitionFindPedidoNextRow;
+  action: Parameters<OrdersLifecycleService['transition']>[1];
+  dto: OrderTransitionDto | CancelOrderDto;
+  actor: Parameters<OrdersLifecycleService['transition']>[3];
+  zone: string;
+  client?: ClientIdentity;
+};
+
 @Injectable()
 export class OrdersLifecycleService {
   constructor(
@@ -76,194 +86,239 @@ export class OrdersLifecycleService {
       dto,
       200,
       'pedido',
-      async (m) => {
-        if (client) {
-          await this.participants.authenticate(m, client);
-          await this.detail(id, client.clientId, false, m);
-        } else {
-          const [valid] = await this.transitionFindUsuario(m, {
-            userId: actor.userId,
-            sessionId: actor.sessionId,
-          });
-          if (!valid) throw new UnauthorizedException('Sesion no valida.');
-          const [allowed] = await this.transitionFindUsuarioNext(m, {
-            userId: actor.userId,
-          });
-          if (!allowed)
-            throw new ForbiddenException('Falta permiso orders.manage.');
-        }
-      },
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [ref] = await this.editFindPedido(m, { id });
-        if (!ref) throw new NotFoundException('Pedido no encontrado.');
-        if (action === 'start-preparation' && ref.id_visita)
-          await this.operationalContext.lockActiveVisit(m, ref.id_visita, zone);
-        const [order] = await this.transitionFindPedidoNext(m, {
-          id,
-        });
-        if (order.modalidad === 'delivery') {
-          if (client)
-            throw new ConflictException(
-              'Operación no habilitada para domicilios.',
-            );
-          const [account] = await this.transitionFindCuentaConsumo(m, {
-            id_cuenta: order.id_cuenta,
-          });
-          if (account.estado !== 'open')
-            throw new ConflictException('La cuenta debe estar abierta.');
-          if (action === 'start-preparation' || action === 'dispatch') {
-            const [day] = await this.transitionFindJornadaOperativa(m, {
-              id_jornada: order.id_jornada,
-              zone,
-            });
-            const [paid] = await this.transitionFindLiquidacion(m, {
-              id_cuenta: order.id_cuenta,
-            });
-            if ((action === 'start-preparation' && !day) || !paid)
-              throw new ConflictException(
-                'Se requiere jornada actual abierta y transferencia confirmada.',
-              );
-          }
-          if (action === 'cancel') {
-            const [payment] = await this.transitionFindPago(m, {
-              id_cuenta: order.id_cuenta,
-            });
-            if (payment)
-              throw new ConflictException(
-                'Existe un pago confirmado o pendiente.',
-              );
-            await this.transitionUpdateLiquidacion(m, {
-              id_cuenta: order.id_cuenta,
+      {
+        authorize: async (m) => {
+          if (client) {
+            await this.participants.authenticate(m, client);
+            await this.detail(id, client.clientId, false, m);
+          } else {
+            const [valid] = await this.transitionFindUsuario(m, {
               userId: actor.userId,
-              reason: 'reason' in dto ? dto.reason : null,
+              sessionId: actor.sessionId,
             });
-            await this.transitionUpdateDetalleLiquidacion(m, {
-              id_cuenta: order.id_cuenta,
+            if (!valid) throw new UnauthorizedException('Sesion no valida.');
+            const [allowed] = await this.transitionFindUsuarioNext(m, {
+              userId: actor.userId,
             });
-            await this.accountLifecycle.closeAccount(m, {
-              id_cuenta: order.id_cuenta,
-            });
+            if (!allowed)
+              throw new ForbiddenException('Falta permiso orders.manage.');
           }
-        }
-        const [pendingCancellation] =
-          await this.transitionFindSolicitudCancelacion(m, {
+        },
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [ref] = await this.editFindPedido(m, { id });
+          if (!ref) throw new NotFoundException('Pedido no encontrado.');
+          if (action === 'start-preparation' && ref.id_visita)
+            await this.operationalContext.lockActiveVisit(
+              m,
+              ref.id_visita,
+              zone,
+            );
+          const [order] = await this.transitionFindPedidoNext(m, {
             id,
           });
-        if (pendingCancellation && action !== 'cancel')
-          throw new ConflictException(
-            'El pedido tiene una solicitud de cancelacion pendiente.',
-          );
-        if (action === 'dispatch' && order.modalidad !== 'delivery')
-          throw new ConflictException('Solo domicilios admiten despacho.');
-        const expected: Record<string, string> = {
-          cancel: 'submitted',
-          'start-preparation': 'submitted',
-          ready: 'preparing',
-          dispatch: 'ready',
-          deliver: order.modalidad === 'delivery' ? 'dispatched' : 'ready',
-        };
-        if (
-          order.numero !== dto.expectedVersion ||
-          order.estado !== expected[action]
-        )
-          throw new ConflictException(
-            'Estado o versión del pedido no válidos.',
-          );
-        const target: Record<string, string> = {
-          cancel: 'cancelled',
-          'start-preparation': 'preparing',
-          ready: 'ready',
-          dispatch: 'dispatched',
-          deliver: 'delivered',
-        };
-        if (action === 'cancel' || action === 'start-preparation') {
-          const reservations: Array<{
-            id: string;
-            inventory: string;
-            quantity: number;
-            physical: number;
-          }> = await this.inventoryOperations.lockReservationsForConsumption(
+          await this.applyDeliveryTransition(m, {
+            order,
+            action,
+            dto,
+            actor,
+            zone,
+            client,
+          });
+          const [pendingCancellation] =
+            await this.transitionFindSolicitudCancelacion(m, {
+              id,
+            });
+          if (pendingCancellation && action !== 'cancel')
+            throw new ConflictException(
+              'El pedido tiene una solicitud de cancelacion pendiente.',
+            );
+          if (action === 'dispatch' && order.modalidad !== 'delivery')
+            throw new ConflictException('Solo domicilios admiten despacho.');
+          const expected: Record<string, string> = {
+            cancel: 'submitted',
+            'start-preparation': 'submitted',
+            ready: 'preparing',
+            dispatch: 'ready',
+            deliver: order.modalidad === 'delivery' ? 'dispatched' : 'ready',
+          };
+          if (
+            order.numero !== dto.expectedVersion ||
+            order.estado !== expected[action]
+          )
+            throw new ConflictException(
+              'Estado o versión del pedido no válidos.',
+            );
+          const target: Record<string, string> = {
+            cancel: 'cancelled',
+            'start-preparation': 'preparing',
+            ready: 'ready',
+            dispatch: 'dispatched',
+            deliver: 'delivered',
+          };
+          await this.resolveInventory(m, { order, action, actor });
+          await this.transitionUpdatePedido(m, {
+            id,
+            status: target[action],
+          });
+          if (action === 'cancel' && order.origen === 'reward')
+            await this.rewards.refundForOrder(m, id, actor);
+          await this.completeDeliveryTransition(m, {
+            id,
+            order,
+            action,
+            actor,
+          });
+          const reason = 'reason' in dto ? dto.reason : null;
+          await this.transitionInsertHistorialPedido(m, {
+            id,
+            id_version: order.id_version,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+            actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
+            event: `order.${action}`,
+            estado: order.estado,
+            nextStatus: target[action],
+            reason,
+          });
+          await this.auditLog.append(
             m,
+            actor,
+            'pedido',
+            id,
+            `order.${action}`,
             {
-              versionId: order.id_version,
+              before: order.estado,
+              after: target[action],
+              reason,
             },
           );
-          for (const reservation of reservations) {
-            if (action === 'cancel')
-              await this.inventoryOperations.decreaseReservedQuantity(m, {
-                inventoryId: reservation.inventory,
-                quantity: reservation.quantity,
-              });
-            else {
-              await this.inventoryOperations.consumeReservedQuantity(m, {
-                inventoryId: reservation.inventory,
-                quantity: reservation.quantity,
-              });
-              await this.inventoryOperations.recordConsumptionMovement(m, {
-                inventoryId: reservation.inventory,
-                reservationId: reservation.id,
-                userId: actor.userId,
-                physicalDelta: -reservation.quantity,
-                previousQuantity: reservation.physical,
-                resultingQuantity: reservation.physical - reservation.quantity,
-              });
-            }
-            await this.inventoryOperations.resolveReservation(m, {
-              reservationId: reservation.id,
-              status: action === 'cancel' ? 'released' : 'consumed',
-            });
-          }
-          if (action === 'cancel')
-            await this.editUpdateAsignacionConsumo(m, {
-              id_version: order.id_version,
-            });
-        }
-        await this.transitionUpdatePedido(m, {
-          id,
-          status: target[action],
-        });
-        if (action === 'cancel' && order.origen === 'reward')
-          await this.rewards.refundForOrder(m, id, actor);
-        if (
-          order.modalidad === 'delivery' &&
-          (action === 'dispatch' || action === 'deliver')
-        ) {
-          await this.transitionUpdateEntregaDomicilio(
-            m,
-            [id, actor.userId],
-            action,
-          );
-          if (action === 'deliver')
-            await this.accountLifecycle.closeAccount(m, {
-              id_cuenta: order.id_cuenta,
-            });
-          if (action === 'deliver')
-            await this.points.deliverOrder(m, id, actor.userId ?? '');
-        }
-        const reason = 'reason' in dto ? dto.reason : null;
-        await this.transitionInsertHistorialPedido(m, {
-          id,
-          id_version: order.id_version,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-          actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
-          event: `order.${action}`,
-          estado: order.estado,
-          nextStatus: target[action],
-          reason,
-        });
-        await this.auditLog.append(m, actor, 'pedido', id, `order.${action}`, {
-          before: order.estado,
-          after: target[action],
-          reason,
-        });
-        return {
-          resourceId: id,
-          response: await this.detail(id, client?.clientId, false, m),
-        };
+          return {
+            resourceId: id,
+            response: await this.detail(id, client?.clientId, false, m),
+          };
+        },
       },
     );
+  }
+
+  private async applyDeliveryTransition(
+    m: EntityManager,
+    context: TransitionContext,
+  ) {
+    const { order, action, dto, actor, zone, client } = context;
+    if (order.modalidad !== 'delivery') return;
+
+    if (client)
+      throw new ConflictException('Operación no habilitada para domicilios.');
+    const [account] = await this.transitionFindCuentaConsumo(m, {
+      id_cuenta: order.id_cuenta,
+    });
+    if (account.estado !== 'open')
+      throw new ConflictException('La cuenta debe estar abierta.');
+    if (action === 'start-preparation' || action === 'dispatch') {
+      const [day] = await this.transitionFindJornadaOperativa(m, {
+        id_jornada: order.id_jornada,
+        zone,
+      });
+      const [paid] = await this.transitionFindLiquidacion(m, {
+        id_cuenta: order.id_cuenta,
+      });
+      if ((action === 'start-preparation' && !day) || !paid)
+        throw new ConflictException(
+          'Se requiere jornada actual abierta y transferencia confirmada.',
+        );
+    }
+    if (action === 'cancel') {
+      const [payment] = await this.transitionFindPago(m, {
+        id_cuenta: order.id_cuenta,
+      });
+      if (payment)
+        throw new ConflictException('Existe un pago confirmado o pendiente.');
+      await this.transitionUpdateLiquidacion(m, {
+        id_cuenta: order.id_cuenta,
+        userId: actor.userId,
+        reason: 'reason' in dto ? dto.reason : null,
+      });
+      await this.transitionUpdateDetalleLiquidacion(m, {
+        id_cuenta: order.id_cuenta,
+      });
+      await this.accountLifecycle.closeAccount(m, {
+        id_cuenta: order.id_cuenta,
+      });
+    }
+  }
+
+  private async resolveInventory(
+    m: EntityManager,
+    context: Pick<TransitionContext, 'order' | 'action' | 'actor'>,
+  ) {
+    const { order, action, actor } = context;
+    if (action !== 'cancel' && action !== 'start-preparation') return;
+
+    const reservations: Array<{
+      id: string;
+      inventory: string;
+      quantity: number;
+      physical: number;
+    }> = await this.inventoryOperations.lockReservationsForConsumption(m, {
+      versionId: order.id_version,
+    });
+    await forEachSequential(reservations, async (reservation) => {
+      if (action === 'cancel')
+        await this.inventoryOperations.decreaseReservedQuantity(m, {
+          inventoryId: reservation.inventory,
+          quantity: reservation.quantity,
+        });
+      else {
+        await this.inventoryOperations.consumeReservedQuantity(m, {
+          inventoryId: reservation.inventory,
+          quantity: reservation.quantity,
+        });
+        await this.inventoryOperations.recordConsumptionMovement(m, {
+          inventoryId: reservation.inventory,
+          reservationId: reservation.id,
+          userId: actor.userId,
+          physicalDelta: -reservation.quantity,
+          previousQuantity: reservation.physical,
+          resultingQuantity: reservation.physical - reservation.quantity,
+        });
+      }
+      await this.inventoryOperations.resolveReservation(m, {
+        reservationId: reservation.id,
+        status: action === 'cancel' ? 'released' : 'consumed',
+      });
+    });
+    if (action === 'cancel')
+      await this.editUpdateAsignacionConsumo(m, {
+        id_version: order.id_version,
+      });
+  }
+
+  private async completeDeliveryTransition(
+    m: EntityManager,
+    context: { id: string } & Pick<
+      TransitionContext,
+      'order' | 'action' | 'actor'
+    >,
+  ) {
+    const { id, order, action, actor } = context;
+    if (
+      order.modalidad === 'delivery' &&
+      (action === 'dispatch' || action === 'deliver')
+    ) {
+      await this.transitionUpdateEntregaDomicilio(
+        m,
+        [id, actor.userId],
+        action,
+      );
+      if (action === 'deliver')
+        await this.accountLifecycle.closeAccount(m, {
+          id_cuenta: order.id_cuenta,
+        });
+      if (action === 'deliver')
+        await this.points.deliverOrder(m, id, actor.userId ?? '');
+    }
   }
 
   async detail(

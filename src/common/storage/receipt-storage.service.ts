@@ -1,7 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
-  ListObjectsV2Command,
+  paginateListObjectsV2,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -82,15 +82,11 @@ export class ReceiptStorageService {
 
   async listOld(cutoff: Date) {
     const objects: Array<{ key: string; modified: Date }> = [];
-    let token: string | undefined;
-    do {
-      const page = await this.active().send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: this.prefix,
-          ContinuationToken: token,
-        }),
-      );
+    const pages = paginateListObjectsV2(
+      { client: this.active() },
+      { Bucket: this.bucket, Prefix: this.prefix },
+    );
+    for await (const page of pages) {
       for (const item of page.Contents ?? [])
         if (
           item.Key?.startsWith(this.prefix) &&
@@ -98,10 +94,9 @@ export class ReceiptStorageService {
           item.LastModified < cutoff
         )
           objects.push({ key: item.Key, modified: item.LastModified });
-      token = page.IsTruncated ? page.NextContinuationToken : undefined;
-      if (page.IsTruncated && !token)
+      if (page.IsTruncated && !page.NextContinuationToken)
         throw new Error('S3 no devolvió el cursor de paginación.');
-    } while (token);
+    }
     return objects;
   }
 }

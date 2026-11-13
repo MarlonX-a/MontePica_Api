@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -53,13 +54,13 @@ export class RedemptionExpiryService {
     this.expiryRunning = true;
     try {
       const attempted: string[] = [];
-      while (true) {
+      const processPage = async (): Promise<void> => {
         const ids: Array<{ id: string }> =
           await this.expirePendingFindSolicitudCanje(this.records.manager, {
             attempted,
           });
-        if (!ids.length) break;
-        for (const row of ids) {
+        if (!ids.length) return;
+        await forEachSequential(ids, async (row) => {
           attempted.push(row.id);
           try {
             await this.db.transaction(async (m) => {
@@ -90,8 +91,10 @@ export class RedemptionExpiryService {
               error instanceof Error ? error.stack : undefined,
             );
           }
-        }
-      }
+        });
+        await processPage();
+      };
+      await processPage();
     } finally {
       this.expiryRunning = false;
     }

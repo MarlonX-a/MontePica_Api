@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import { Injectable } from '@nestjs/common';
 import { type EntityManager } from 'typeorm';
 import { ConsumptionAccount } from '../accounts/entities/consumption-account.entity.js';
@@ -236,13 +237,13 @@ export class DeliveryLifecycleService {
       await this.expireDeliveryFindReservaInventario(m, {
         id_version: o.id_version,
       });
-    for (const r of reserves) {
+    await forEachSequential(reserves, async (r) => {
       await this.expireDeliveryUpdateInventarioDiario(m, {
         inventory: r.inventory,
         quantity: r.quantity,
       });
       await this.expireDeliveryUpdateReservaInventario(m, { id: r.id });
-    }
+    });
     await this.expireDeliveryUpdateAsignacionConsumo(m, {
       id_cuenta: o.id_cuenta,
     });

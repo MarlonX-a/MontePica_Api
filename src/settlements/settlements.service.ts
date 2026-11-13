@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   ConflictException,
   ForbiddenException,
@@ -113,85 +114,90 @@ export class SettlementsService {
       {},
       201,
       'liquidacion',
-      (m) => this.authorize(m, actor),
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [day] = await this.createFindJornadaOperativa(m, {
-          zone,
-        });
-        if (!day)
-          throw new ConflictException(
-            'Se requiere jornada y caja actuales abiertas.',
-          );
-        const [account] = await this.createFindCuentaConsumo(m, {
-          accountId,
-        });
-        if (!account) throw new NotFoundException('Cuenta no encontrada.');
-        if (account.modalidad === 'delivery')
-          throw new ConflictException(
-            'La liquidación del domicilio se genera con su pedido.',
-          );
-        if (account.estado !== 'open')
-          throw new ConflictException('La cuenta está cerrada.');
-        const [existing] = await this.createFindLiquidacion(m, {
-          accountId,
-        });
-        if (existing)
-          throw new ConflictException(
-            'La cuenta ya tiene una liquidación pendiente.',
-          );
-        const [cancellation] = await this.createFindSolicitudCancelacion(m, {
-          accountId,
-        });
-        if (cancellation)
-          throw new ConflictException(
-            'Hay una solicitud de cancelacion pendiente.',
-          );
-        const [unfinished] = await this.createFindPedido(m, {
-          accountId,
-        });
-        if (unfinished)
-          throw new ConflictException(
-            'Todos los pedidos deben estar entregados.',
-          );
-        const items: Array<{ id: string; quantity: number; price: number }> =
-          await this.createFindAsignacionConsumo(m, {
+      {
+        authorize: (m) => this.authorize(m, actor),
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [day] = await this.createFindJornadaOperativa(m, {
+            zone,
+          });
+          if (!day)
+            throw new ConflictException(
+              'Se requiere jornada y caja actuales abiertas.',
+            );
+          const [account] = await this.createFindCuentaConsumo(m, {
             accountId,
           });
-        if (!items.length)
-          throw new ConflictException('La cuenta no tiene consumo pendiente.');
-        const total = items.reduce(
-          (sum, item) => sum + item.quantity * item.price,
-          0,
-        );
-        if (!Number.isSafeInteger(total))
-          throw new ConflictException('El total supera el límite permitido.');
-        const [settlement] = await this.createInsertLiquidacion(m, {
-          accountId,
-          cash: day.cash,
-          total,
-          userId: actor.userId,
-        });
-        for (const item of items)
-          await this.createInsertDetalleLiquidacion(m, {
-            id: settlement.id,
-            id2: item.id,
-            quantity: item.quantity,
-            price: item.price,
-            quantity5: item.quantity * item.price,
+          if (!account) throw new NotFoundException('Cuenta no encontrada.');
+          if (account.modalidad === 'delivery')
+            throw new ConflictException(
+              'La liquidación del domicilio se genera con su pedido.',
+            );
+          if (account.estado !== 'open')
+            throw new ConflictException('La cuenta está cerrada.');
+          const [existing] = await this.createFindLiquidacion(m, {
+            accountId,
           });
-        await this.auditLog.append(
-          m,
-          { userId: actor.userId },
-          'liquidacion',
-          settlement.id,
-          'settlement.created',
-          { accountId, cashRegisterId: day.cash, totalCents: total },
-        );
-        return {
-          resourceId: settlement.id,
-          response: await this.settlement(settlement.id, undefined, m),
-        };
+          if (existing)
+            throw new ConflictException(
+              'La cuenta ya tiene una liquidación pendiente.',
+            );
+          const [cancellation] = await this.createFindSolicitudCancelacion(m, {
+            accountId,
+          });
+          if (cancellation)
+            throw new ConflictException(
+              'Hay una solicitud de cancelacion pendiente.',
+            );
+          const [unfinished] = await this.createFindPedido(m, {
+            accountId,
+          });
+          if (unfinished)
+            throw new ConflictException(
+              'Todos los pedidos deben estar entregados.',
+            );
+          const items: Array<{ id: string; quantity: number; price: number }> =
+            await this.createFindAsignacionConsumo(m, {
+              accountId,
+            });
+          if (!items.length)
+            throw new ConflictException(
+              'La cuenta no tiene consumo pendiente.',
+            );
+          const total = items.reduce(
+            (sum, item) => sum + item.quantity * item.price,
+            0,
+          );
+          if (!Number.isSafeInteger(total))
+            throw new ConflictException('El total supera el límite permitido.');
+          const [settlement] = await this.createInsertLiquidacion(m, {
+            accountId,
+            cash: day.cash,
+            total,
+            userId: actor.userId,
+          });
+          await forEachSequential(items, async (item) => {
+            await this.createInsertDetalleLiquidacion(m, {
+              id: settlement.id,
+              id2: item.id,
+              quantity: item.quantity,
+              price: item.price,
+              quantity5: item.quantity * item.price,
+            });
+          });
+          await this.auditLog.append(
+            m,
+            { userId: actor.userId },
+            'liquidacion',
+            settlement.id,
+            'settlement.created',
+            { accountId, cashRegisterId: day.cash, totalCents: total },
+          );
+          return {
+            resourceId: settlement.id,
+            response: await this.settlement(settlement.id, undefined, m),
+          };
+        },
       },
     );
   }
@@ -209,48 +215,52 @@ export class SettlementsService {
       { reason },
       200,
       'liquidacion',
-      (m) => this.authorize(m, actor),
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const [ref] = await this.cancelFindLiquidacion(m, {
-          id,
-        });
-        if (!ref) throw new NotFoundException('Liquidación no encontrada.');
-        const [account] = await this.cancelFindCuentaConsumo(m, {
-          id_cuenta: ref.id_cuenta,
-        });
-        if (account.modalidad === 'delivery')
-          throw new ConflictException('Debe anularse el pedido de domicilio.');
-        const [row] = await this.cancelFindLiquidacionNext(m, {
-          id,
-        });
-        if (row.estado !== 'pending')
-          throw new ConflictException('La liquidación ya fue anulada.');
-        const [pendingTransfer] = await this.cancelFindPago(m, {
-          id,
-        });
-        if (pendingTransfer)
-          throw new ConflictException(
-            'Existe una transferencia pendiente de verificación.',
+      {
+        authorize: (m) => this.authorize(m, actor),
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const [ref] = await this.cancelFindLiquidacion(m, {
+            id,
+          });
+          if (!ref) throw new NotFoundException('Liquidación no encontrada.');
+          const [account] = await this.cancelFindCuentaConsumo(m, {
+            id_cuenta: ref.id_cuenta,
+          });
+          if (account.modalidad === 'delivery')
+            throw new ConflictException(
+              'Debe anularse el pedido de domicilio.',
+            );
+          const [row] = await this.cancelFindLiquidacionNext(m, {
+            id,
+          });
+          if (row.estado !== 'pending')
+            throw new ConflictException('La liquidación ya fue anulada.');
+          const [pendingTransfer] = await this.cancelFindPago(m, {
+            id,
+          });
+          if (pendingTransfer)
+            throw new ConflictException(
+              'Existe una transferencia pendiente de verificación.',
+            );
+          await this.cancelUpdateLiquidacion(m, {
+            id,
+            userId: actor.userId,
+            reason,
+          });
+          await this.cancelUpdateDetalleLiquidacion(m, { id });
+          await this.auditLog.append(
+            m,
+            { userId: actor.userId },
+            'liquidacion',
+            id,
+            'settlement.cancelled',
+            { reason, accountId: ref.id_cuenta },
           );
-        await this.cancelUpdateLiquidacion(m, {
-          id,
-          userId: actor.userId,
-          reason,
-        });
-        await this.cancelUpdateDetalleLiquidacion(m, { id });
-        await this.auditLog.append(
-          m,
-          { userId: actor.userId },
-          'liquidacion',
-          id,
-          'settlement.cancelled',
-          { reason, accountId: ref.id_cuenta },
-        );
-        return {
-          resourceId: id,
-          response: await this.settlement(id, undefined, m),
-        };
+          return {
+            resourceId: id,
+            response: await this.settlement(id, undefined, m),
+          };
+        },
       },
     );
   }

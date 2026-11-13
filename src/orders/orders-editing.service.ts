@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   BadRequestException,
   ConflictException,
@@ -62,151 +63,158 @@ export class OrdersEditingService {
       dto,
       200,
       'pedido',
-      async (m) => {
-        await this.participants.authenticate(m, client);
-        await this.detail(id, client.clientId, false, m);
-      },
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [ref] = await this.editFindPedido(m, { id });
-        if (!ref) throw new NotFoundException('Pedido no encontrado.');
-        if (!ref.id_visita)
-          throw new ConflictException('Los domicilios no admiten edición.');
-        await this.operationalContext.lockActiveVisit(m, ref.id_visita, zone);
-        const [order] = await this.editFindPedidoNext(m, {
-          id,
-          clientId: client.clientId,
-        });
-        if (
-          !order ||
-          order.estado !== 'submitted' ||
-          order.numero !== dto.expectedVersion ||
-          !order.editable
-        )
-          throw new ConflictException(
-            'El pedido no se puede editar o su versión cambió.',
-          );
-        const [pending] = await this.editFindLiquidacion(m, {
-          id_cuenta: order.id_cuenta,
-        });
-        if (pending)
-          throw new ConflictException(
-            'La cuenta tiene una liquidación pendiente.',
-          );
-        const products: Array<{ id: string; price: number; tracks: boolean }> =
-          await this.inventoryOperations.lockAvailableProducts(m, {
+      {
+        authorize: async (m) => {
+          await this.participants.authenticate(m, client);
+          await this.detail(id, client.clientId, false, m);
+        },
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [ref] = await this.editFindPedido(m, { id });
+          if (!ref) throw new NotFoundException('Pedido no encontrado.');
+          if (!ref.id_visita)
+            throw new ConflictException('Los domicilios no admiten edición.');
+          await this.operationalContext.lockActiveVisit(m, ref.id_visita, zone);
+          const [order] = await this.editFindPedidoNext(m, {
+            id,
+            clientId: client.clientId,
+          });
+          if (
+            order?.estado !== 'submitted' ||
+            order.numero !== dto.expectedVersion ||
+            !order.editable
+          )
+            throw new ConflictException(
+              'El pedido no se puede editar o su versión cambió.',
+            );
+          const [pending] = await this.editFindLiquidacion(m, {
+            id_cuenta: order.id_cuenta,
+          });
+          if (pending)
+            throw new ConflictException(
+              'La cuenta tiene una liquidación pendiente.',
+            );
+          const products: Array<{
+            id: string;
+            price: number;
+            tracks: boolean;
+          }> = await this.inventoryOperations.lockAvailableProducts(m, {
             productIds: ids,
           });
-        if (products.length !== ids.length)
-          throw new ConflictException(
-            'Uno o más productos no están disponibles.',
-          );
-        const old: Array<{ id: string; price: number; tracks: boolean }> =
-          await this.editFindDetallePedido(m, {
-            id_version: order.id_version,
+          if (products.length !== ids.length)
+            throw new ConflictException(
+              'Uno o más productos no están disponibles.',
+            );
+          const old: Array<{ id: string; price: number; tracks: boolean }> =
+            await this.editFindDetallePedido(m, {
+              id_version: order.id_version,
+            });
+          const reservations: Array<{
+            id: string;
+            inventory: string;
+            quantity: number;
+          }> = await this.inventoryOperations.lockVersionReservations(m, {
+            versionId: order.id_version,
           });
-        const reservations: Array<{
-          id: string;
-          inventory: string;
-          quantity: number;
-        }> = await this.inventoryOperations.lockVersionReservations(m, {
-          versionId: order.id_version,
-        });
-        const stock: Array<{ id: string; product: string; available: number }> =
-          await this.inventoryOperations.lockReplacementInventory(m, {
+          const stock: Array<{
+            id: string;
+            product: string;
+            available: number;
+          }> = await this.inventoryOperations.lockReplacementInventory(m, {
             operatingDayId: order.id_jornada,
             productIds: ids,
             reservedInventoryIds: reservations.map((r) => r.inventory),
           });
-        let total = 0;
-        for (const item of dto.items) {
-          const product = products.find(
-            (p) => p.id === item.productId.toLowerCase(),
-          )!;
-          const snapshot = old.find((p) => p.id === product.id) ?? product;
-          const inventory = stock.find((s) => s.product === product.id);
-          const released = reservations
-            .filter((r) => r.inventory === inventory?.id)
-            .reduce((a, r) => a + r.quantity, 0);
-          if (
-            snapshot.tracks &&
-            (!inventory || inventory.available + released < item.quantity)
-          )
-            throw new ConflictException(
-              'Inventario insuficiente o sin inicializar.',
-            );
-          total += snapshot.price * item.quantity;
-        }
-        if (!Number.isSafeInteger(total))
-          throw new ConflictException('El total supera el límite permitido.');
-        for (const r of reservations) {
-          await this.inventoryOperations.decreaseReservedQuantity(m, {
-            inventoryId: r.inventory,
-            quantity: r.quantity,
-          });
-          await this.inventoryOperations.releaseReservation(m, {
-            reservationId: r.id,
-          });
-        }
-        await this.editUpdateAsignacionConsumo(m, {
-          id_version: order.id_version,
-        });
-        await this.editUpdateVersionPedido(m, {
-          id_version: order.id_version,
-        });
-        const [version] = await this.editInsertVersionPedido(m, {
-          id,
-          numero: order.numero + 1,
-          total,
-          notes: dto.notes ?? null,
-        });
-        for (const item of dto.items) {
-          const product = products.find(
-            (p) => p.id === item.productId.toLowerCase(),
-          )!;
-          const snapshot = old.find((p) => p.id === product.id) ?? product;
-          const [detail] = await this.editInsertDetallePedido(m, {
-            id: version.id,
-            id2: product.id,
-            quantity: item.quantity,
-            price: snapshot.price,
-            tracks: snapshot.tracks,
-            notes: item.notes ?? null,
-          });
-          await this.editInsertAsignacionConsumo(m, {
-            id: detail.id,
-            id_cuenta: order.id_cuenta,
-            quantity: item.quantity,
-          });
-          if (snapshot.tracks) {
-            const i = stock.find((s) => s.product === product.id)!;
-            await this.inventoryOperations.increaseReservedQuantity(m, {
-              inventoryId: i.id,
-              quantity: item.quantity,
-            });
-            await this.inventoryOperations.createReservation(m, {
-              orderItemId: detail.id,
-              inventoryId: i.id,
-              quantity: item.quantity,
-            });
+          let total = 0;
+          for (const item of dto.items) {
+            const product = products.find(
+              (p) => p.id === item.productId.toLowerCase(),
+            )!;
+            const snapshot = old.find((p) => p.id === product.id) ?? product;
+            const inventory = stock.find((s) => s.product === product.id);
+            const released = reservations
+              .filter((r) => r.inventory === inventory?.id)
+              .reduce((a, r) => a + r.quantity, 0);
+            if (
+              snapshot.tracks &&
+              (!inventory || inventory.available + released < item.quantity)
+            )
+              throw new ConflictException(
+                'Inventario insuficiente o sin inicializar.',
+              );
+            total += snapshot.price * item.quantity;
           }
-        }
-        await this.editInsertHistorialPedido(m, {
-          id,
-          versionId: version.id,
-          userId: actor.userId ?? null,
-          guestSessionId: actor.guestSessionId ?? null,
-          actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
-        });
-        await this.auditLog.append(m, actor, 'pedido', id, 'order.edited', {
-          previousVersion: order.numero,
-          version: order.numero + 1,
-          totalCents: total,
-        });
-        return {
-          resourceId: id,
-          response: await this.detail(id, client.clientId, false, m),
-        };
+          if (!Number.isSafeInteger(total))
+            throw new ConflictException('El total supera el límite permitido.');
+          await forEachSequential(reservations, async (r) => {
+            await this.inventoryOperations.decreaseReservedQuantity(m, {
+              inventoryId: r.inventory,
+              quantity: r.quantity,
+            });
+            await this.inventoryOperations.releaseReservation(m, {
+              reservationId: r.id,
+            });
+          });
+          await this.editUpdateAsignacionConsumo(m, {
+            id_version: order.id_version,
+          });
+          await this.editUpdateVersionPedido(m, {
+            id_version: order.id_version,
+          });
+          const [version] = await this.editInsertVersionPedido(m, {
+            id,
+            numero: order.numero + 1,
+            total,
+            notes: dto.notes ?? null,
+          });
+          await forEachSequential(dto.items, async (item) => {
+            const product = products.find(
+              (p) => p.id === item.productId.toLowerCase(),
+            )!;
+            const snapshot = old.find((p) => p.id === product.id) ?? product;
+            const [detail] = await this.editInsertDetallePedido(m, {
+              id: version.id,
+              id2: product.id,
+              quantity: item.quantity,
+              price: snapshot.price,
+              tracks: snapshot.tracks,
+              notes: item.notes ?? null,
+            });
+            await this.editInsertAsignacionConsumo(m, {
+              id: detail.id,
+              id_cuenta: order.id_cuenta,
+              quantity: item.quantity,
+            });
+            if (snapshot.tracks) {
+              const i = stock.find((s) => s.product === product.id)!;
+              await this.inventoryOperations.increaseReservedQuantity(m, {
+                inventoryId: i.id,
+                quantity: item.quantity,
+              });
+              await this.inventoryOperations.createReservation(m, {
+                orderItemId: detail.id,
+                inventoryId: i.id,
+                quantity: item.quantity,
+              });
+            }
+          });
+          await this.editInsertHistorialPedido(m, {
+            id,
+            versionId: version.id,
+            userId: actor.userId ?? null,
+            guestSessionId: actor.guestSessionId ?? null,
+            actorType: actor.guestSessionId ? 'sesion_cliente' : 'usuario',
+          });
+          await this.auditLog.append(m, actor, 'pedido', id, 'order.edited', {
+            previousVersion: order.numero,
+            version: order.numero + 1,
+            totalCents: total,
+          });
+          return {
+            resourceId: id,
+            response: await this.detail(id, client.clientId, false, m),
+          };
+        },
       },
     );
   }

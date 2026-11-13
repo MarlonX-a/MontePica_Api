@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import 'dotenv/config';
 import { DataSource } from 'typeorm';
 import { ReceiptReconciliationService } from '../common/storage/receipt-reconciliation.service.js';
@@ -17,7 +18,7 @@ try {
     new Date(Date.now() - 24 * 60 * 60 * 1000),
   );
   let removed = 0;
-  for (const candidate of candidates) {
+  await forEachSequential(candidates, async (candidate) => {
     const referenced = await reconciliation.isReferenced(
       db.manager,
       candidate.key,
@@ -26,7 +27,7 @@ try {
       await storage.delete(candidate.key);
       removed++;
     }
-  }
+  });
   process.stdout.write(
     `Objetos revisados: ${candidates.length}; huérfanos eliminados: ${removed}.\n`,
   );

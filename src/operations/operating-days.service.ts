@@ -134,50 +134,53 @@ export class OperatingDaysService {
       dto,
       201,
       'jornada_operativa',
-      (manager) => this.authorizeOperatingAction(manager, actor, 'exception'),
-      async (manager) => {
-        await this.lockOperations(manager);
-        const settings = await this.getSettingsWith(manager);
-        const pendingDays = await this.findOpenDayIds(
-          manager,
-          settings.timeZone,
-        );
-        if (!pendingDays.length)
-          throw new ConflictException(
-            'No existen jornadas anteriores abiertas que requieran recuperación.',
+      {
+        authorize: (manager) =>
+          this.authorizeOperatingAction(manager, actor, 'exception'),
+        action: async (manager) => {
+          await this.lockOperations(manager);
+          const settings = await this.getSettingsWith(manager);
+          const pendingDays = await this.findOpenDayIds(
+            manager,
+            settings.timeZone,
           );
-        const current = await this.findCurrentDay(manager, settings.timeZone);
-        if (current.length)
-          throw new ConflictException(
-            'Ya existe una jornada para la fecha operativa actual.',
-          );
-        const day = await this.insertExceptionOpening(manager, {
-          timeZone: settings.timeZone,
-          userId: actor.userId,
-          reason: dto.reason,
-          previousDayIds: pendingDays.map((item) => item.id),
-        });
-        await this.auditRecords.append(
-          manager,
-          { userId: actor.userId },
-          'jornada_operativa',
-          day.id,
-          'operations.day_opened_with_pending_days',
-          {
+          if (!pendingDays.length)
+            throw new ConflictException(
+              'No existen jornadas anteriores abiertas que requieran recuperación.',
+            );
+          const current = await this.findCurrentDay(manager, settings.timeZone);
+          if (current.length)
+            throw new ConflictException(
+              'Ya existe una jornada para la fecha operativa actual.',
+            );
+          const day = await this.insertExceptionOpening(manager, {
+            timeZone: settings.timeZone,
+            userId: actor.userId,
             reason: dto.reason,
-            pendingOperatingDays: pendingDays,
-          },
-        );
-        return {
-          resourceId: day.id,
-          response: {
-            ...day,
-            exceptionalOpening: {
+            previousDayIds: pendingDays.map((item) => item.id),
+          });
+          await this.auditRecords.append(
+            manager,
+            { userId: actor.userId },
+            'jornada_operativa',
+            day.id,
+            'operations.day_opened_with_pending_days',
+            {
               reason: dto.reason,
-              pendingOperatingDayIds: pendingDays.map((item) => item.id),
+              pendingOperatingDays: pendingDays,
             },
-          },
-        };
+          );
+          return {
+            resourceId: day.id,
+            response: {
+              ...day,
+              exceptionalOpening: {
+                reason: dto.reason,
+                pendingOperatingDayIds: pendingDays.map((item) => item.id),
+              },
+            },
+          };
+        },
       },
     );
   }

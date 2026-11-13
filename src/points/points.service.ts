@@ -62,34 +62,36 @@ export class PointsService {
       { enabled, pointsPerDollar: rate },
       200,
       'configuracion_puntos',
-      async (m) => {
-        const [s] = await this.configureFindRolPermiso(m, {
-          userId: actor.userId,
-          sessionId: actor.sessionId,
-        });
-        if (!s || !s.activo || s.revocada_en || !s.valid)
-          throw new UnauthorizedException('Sesión inválida.');
-        if (!s.allowed) throw new ForbiddenException('Permiso insuficiente.');
-      },
-      async (m) => {
-        await this.operationalContext.lockTableOperations(m);
-        const old = await this.current(m);
-        const [row] = await this.configureInsertConfiguracionPuntos(m, {
-          version: old.version + 1,
-          enabled,
-          rate,
-          userId: actor.userId,
-        });
-        const result = await this.current(m);
-        await this.auditLog.append(
-          m,
-          { userId: actor.userId },
-          'configuracion_puntos',
-          row.id,
-          'points.settings_updated',
-          { before: old, after: result },
-        );
-        return { resourceId: row.id, response: result };
+      {
+        authorize: async (m) => {
+          const [s] = await this.configureFindRolPermiso(m, {
+            userId: actor.userId,
+            sessionId: actor.sessionId,
+          });
+          if (!s || !s.activo || s.revocada_en || !s.valid)
+            throw new UnauthorizedException('Sesión inválida.');
+          if (!s.allowed) throw new ForbiddenException('Permiso insuficiente.');
+        },
+        action: async (m) => {
+          await this.operationalContext.lockTableOperations(m);
+          const old = await this.current(m);
+          const [row] = await this.configureInsertConfiguracionPuntos(m, {
+            version: old.version + 1,
+            enabled,
+            rate,
+            userId: actor.userId,
+          });
+          const result = await this.current(m);
+          await this.auditLog.append(
+            m,
+            { userId: actor.userId },
+            'configuracion_puntos',
+            row.id,
+            'points.settings_updated',
+            { before: old, after: result },
+          );
+          return { resourceId: row.id, response: result };
+        },
       },
     );
   }

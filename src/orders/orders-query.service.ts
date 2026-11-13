@@ -1,3 +1,4 @@
+import { forEachSequential } from '../common/async/for-each-sequential.js';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
@@ -68,11 +69,12 @@ export class OrdersQueryService {
     const versions = await this.historyFindVersionPedido(this.records.manager, {
       id,
     });
-    for (const version of versions)
+    await forEachSequential(versions, async (version) => {
       version.items = await this.historyFindDetallePedido(
         this.records.manager,
         { id: version.id },
       );
+    });
     const events = await this.detailFindHistorialPedido(this.records.manager, {
       id,
     });

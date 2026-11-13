@@ -95,50 +95,162 @@ export class RedemptionDecisionService {
       { reason: reason ?? null },
       200,
       'solicitud_canje',
-      async (m) => {
-        await this.staff(m, actor, 'redemptions.manage');
-      },
-      async (m) => {
-        const zone = await this.operationalContext.lockTableOperations(m);
-        const [ref] = await this.decideFindSolicitudCanje(m, {
-          id,
-        });
-        if (!ref) throw new NotFoundException('Canje no encontrado.');
-        if (action === 'approve')
-          await this.operationalContext.lockActiveVisit(m, ref.visit, zone);
-        else await this.decideFindVisitaMesa(m, { visit: ref.visit });
-        if (action === 'approve') {
-          const [closed] = await this.decideFindSolicitudCanjeNext(m, {
+      {
+        authorize: async (m) => {
+          await this.staff(m, actor, 'redemptions.manage');
+        },
+        action: async (m) => {
+          const zone = await this.operationalContext.lockTableOperations(m);
+          const [ref] = await this.decideFindSolicitudCanje(m, {
             id,
           });
-          if (closed)
-            throw new ConflictException(
-              'La caja de la jornada ya fue cerrada.',
-            );
-        }
-        await this.requestFindCliente(m, { clientId: ref.client });
-        await this.decideFindCuentaConsumo(m, {
-          account: ref.account,
-        });
-        const [s] = await this.decideFindSolicitudCanjeNextNext(m, {
-          id,
-        });
-        if (s.estado !== 'pending')
-          throw new ConflictException('El canje ya fue resuelto.');
-        if (action === 'reject') {
-          await this.reservations.release(m, id, 'rejected');
-          await this.decideUpdateSolicitudCanje(m, {
+          if (!ref) throw new NotFoundException('Canje no encontrado.');
+          if (action === 'approve')
+            await this.operationalContext.lockActiveVisit(m, ref.visit, zone);
+          else await this.decideFindVisitaMesa(m, { visit: ref.visit });
+          if (action === 'approve') {
+            const [closed] = await this.decideFindSolicitudCanjeNext(m, {
+              id,
+            });
+            if (closed)
+              throw new ConflictException(
+                'La caja de la jornada ya fue cerrada.',
+              );
+          }
+          await this.requestFindCliente(m, { clientId: ref.client });
+          await this.decideFindCuentaConsumo(m, {
+            account: ref.account,
+          });
+          const [s] = await this.decideFindSolicitudCanjeNextNext(m, {
             id,
-            reason,
+          });
+          if (s.estado !== 'pending')
+            throw new ConflictException('El canje ya fue resuelto.');
+          if (action === 'reject') {
+            await this.reservations.release(m, id, 'rejected');
+            await this.decideUpdateSolicitudCanje(m, {
+              id,
+              reason,
+              userId: actor.userId,
+            });
+            await this.reservations.history(
+              m,
+              id,
+              actor.userId,
+              'redemption.rejected',
+              {
+                reason,
+              },
+            );
+            await this.auditLog.append(
+              m,
+              this.user(actor),
+              'solicitud_canje',
+              id,
+              'redemption.rejected',
+              { reason },
+            );
+            return {
+              resourceId: id,
+              response: await this.queries.redemption(id, undefined, m, true),
+            };
+          }
+          const [valid] = await this.decideFindSolicitudCanjeNextNextNext(m, {
+            id,
+          });
+          if (
+            !valid.fresh ||
+            valid.participant !== 'approved' ||
+            valid.account !== 'open' ||
+            valid.visit !== 'open' ||
+            !valid.table_active ||
+            valid.day_status !== 'open' ||
+            !valid.current_day ||
+            !valid.reward ||
+            !valid.product_active ||
+            !valid.visible_menu ||
+            !valid.category_active
+          )
+            throw new ConflictException(
+              'El canje o las condiciones operativas ya no están vigentes.',
+            );
+          const [bill] = await this.requestFindLiquidacion(m, {
+            account: s.id_cuenta,
+          });
+          if (bill)
+            throw new ConflictException(
+              'La cuenta tiene una liquidación pendiente.',
+            );
+          const [balance] = await this.decideFindMovimientoPuntos(m, {
+            id_cliente: s.id_cliente,
+            id,
+          });
+          if (
+            BigInt(balance.balance) - BigInt(balance.reserved) <
+            BigInt(s.costo_puntos)
+          )
+            throw new ConflictException(
+              'El saldo disponible ya no cubre este canje.',
+            );
+          const [inv] = await this.decideFindReservaInventarioCanje(m, {
+            id,
+          });
+          if (valid.tracks && inv?.reservation_state !== 'active')
+            throw new ConflictException(
+              'La reserva de existencias ya no está disponible.',
+            );
+          const [order] = await this.decideInsertPedido(m, {
+            id_jornada: s.id_jornada,
+            id_visita: s.id_visita,
+            id_cuenta: s.id_cuenta,
+            userId: actor.userId,
+            id,
+          });
+          const [version] = await this.decideInsertVersionPedido(m, {
+            id: order.id,
+          });
+          const [detail] = await this.decideInsertDetallePedido(m, {
+            id: version.id,
+            id_producto: s.id_producto,
+            tracks: valid.tracks,
+          });
+          await this.decideInsertAsignacionConsumo(m, {
+            id: detail.id,
+            id_cuenta: s.id_cuenta,
+          });
+          if (valid.tracks) {
+            await this.decideInsertReservaInventario(m, {
+              id: detail.id,
+              inventory: inv.inventory,
+            });
+            await this.decideUpdateReservaInventarioCanje(m, {
+              id,
+            });
+          }
+          await this.decideInsertMovimientoPuntos(m, {
+            id_cliente: s.id_cliente,
+            id,
+            costo_puntos: s.costo_puntos,
+          });
+          await this.reservations.ensurePointBalance(s.id_cliente, m);
+          await this.decideUpdateReservaPuntosCanje(m, { id });
+          await this.decideInsertHistorialPedido(m, {
+            id: order.id,
+            id2: version.id,
+            userId: actor.userId,
+          });
+          await this.decideUpdateSolicitudCanjeNext(m, {
+            id,
+            id2: order.id,
             userId: actor.userId,
           });
           await this.reservations.history(
             m,
             id,
             actor.userId,
-            'redemption.rejected',
+            'redemption.approved',
             {
-              reason,
+              orderId: order.id,
             },
           );
           await this.auditLog.append(
@@ -146,124 +258,14 @@ export class RedemptionDecisionService {
             this.user(actor),
             'solicitud_canje',
             id,
-            'redemption.rejected',
-            { reason },
+            'redemption.approved',
+            { orderId: order.id, points: Number(s.costo_puntos) },
           );
           return {
             resourceId: id,
             response: await this.queries.redemption(id, undefined, m, true),
           };
-        }
-        const [valid] = await this.decideFindSolicitudCanjeNextNextNext(m, {
-          id,
-        });
-        if (
-          !valid.fresh ||
-          valid.participant !== 'approved' ||
-          valid.account !== 'open' ||
-          valid.visit !== 'open' ||
-          !valid.table_active ||
-          valid.day_status !== 'open' ||
-          !valid.current_day ||
-          !valid.reward ||
-          !valid.product_active ||
-          !valid.visible_menu ||
-          !valid.category_active
-        )
-          throw new ConflictException(
-            'El canje o las condiciones operativas ya no están vigentes.',
-          );
-        const [bill] = await this.requestFindLiquidacion(m, {
-          account: s.id_cuenta,
-        });
-        if (bill)
-          throw new ConflictException(
-            'La cuenta tiene una liquidación pendiente.',
-          );
-        const [balance] = await this.decideFindMovimientoPuntos(m, {
-          id_cliente: s.id_cliente,
-          id,
-        });
-        if (
-          BigInt(balance.balance) - BigInt(balance.reserved) <
-          BigInt(s.costo_puntos)
-        )
-          throw new ConflictException(
-            'El saldo disponible ya no cubre este canje.',
-          );
-        const [inv] = await this.decideFindReservaInventarioCanje(m, {
-          id,
-        });
-        if (valid.tracks && (!inv || inv.reservation_state !== 'active'))
-          throw new ConflictException(
-            'La reserva de existencias ya no está disponible.',
-          );
-        const [order] = await this.decideInsertPedido(m, {
-          id_jornada: s.id_jornada,
-          id_visita: s.id_visita,
-          id_cuenta: s.id_cuenta,
-          userId: actor.userId,
-          id,
-        });
-        const [version] = await this.decideInsertVersionPedido(m, {
-          id: order.id,
-        });
-        const [detail] = await this.decideInsertDetallePedido(m, {
-          id: version.id,
-          id_producto: s.id_producto,
-          tracks: valid.tracks,
-        });
-        await this.decideInsertAsignacionConsumo(m, {
-          id: detail.id,
-          id_cuenta: s.id_cuenta,
-        });
-        if (valid.tracks) {
-          await this.decideInsertReservaInventario(m, {
-            id: detail.id,
-            inventory: inv.inventory,
-          });
-          await this.decideUpdateReservaInventarioCanje(m, {
-            id,
-          });
-        }
-        await this.decideInsertMovimientoPuntos(m, {
-          id_cliente: s.id_cliente,
-          id,
-          costo_puntos: s.costo_puntos,
-        });
-        await this.reservations.ensurePointBalance(s.id_cliente, m);
-        await this.decideUpdateReservaPuntosCanje(m, { id });
-        await this.decideInsertHistorialPedido(m, {
-          id: order.id,
-          id2: version.id,
-          userId: actor.userId,
-        });
-        await this.decideUpdateSolicitudCanjeNext(m, {
-          id,
-          id2: order.id,
-          userId: actor.userId,
-        });
-        await this.reservations.history(
-          m,
-          id,
-          actor.userId,
-          'redemption.approved',
-          {
-            orderId: order.id,
-          },
-        );
-        await this.auditLog.append(
-          m,
-          this.user(actor),
-          'solicitud_canje',
-          id,
-          'redemption.approved',
-          { orderId: order.id, points: Number(s.costo_puntos) },
-        );
-        return {
-          resourceId: id,
-          response: await this.queries.redemption(id, undefined, m, true),
-        };
+        },
       },
     );
   }
