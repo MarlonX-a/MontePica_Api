@@ -6,6 +6,8 @@ import { ProductResponseDto } from './dto/product-response.dto.js';
 import { Category } from './entities/category.entity.js';
 import { Product } from './entities/product.entity.js';
 
+const LIKE_ESCAPE_REPLACEMENT = String.raw`\$&`;
+
 @Injectable()
 export class CatalogService {
   constructor(
@@ -67,13 +69,15 @@ export class CatalogService {
         categoryId: query.categoryId,
       });
     const search = query.search?.trim();
-    if (search)
+    if (search) {
+      const escapedSearch = search.replace(/[\\%_]/g, LIKE_ESCAPE_REPLACEMENT);
       builder.andWhere(
         String.raw`(product.name ILIKE :search ESCAPE E'\\' OR product.description ILIKE :search ESCAPE E'\\')`,
         {
-          search: `%${search.replace(/[\\%_]/g, String.raw`\$&`)}%`,
+          search: `%${escapedSearch}%`,
         },
       );
+    }
     return builder
       .orderBy('product.sortOrder', 'ASC')
       .addOrderBy('product.name', 'ASC')

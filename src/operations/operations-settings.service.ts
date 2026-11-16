@@ -84,7 +84,7 @@ export class OperationsSettingsService {
     });
   }
 
-  private async getSettingsWith(
+  async getSettingsWith(
     manager: import('typeorm').EntityManager,
   ): Promise<SettingsRow> {
     const rows = await this.getSettingsWithFindConfiguracionOperativa(manager);

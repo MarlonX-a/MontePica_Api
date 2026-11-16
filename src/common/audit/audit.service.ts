@@ -5,6 +5,26 @@ import { AuditEntry } from './entities/audit-entry.entity.js';
 
 @Injectable()
 export class AuditService {
+  appendChange(
+    manager: EntityManager,
+    actor: AuditActor | null,
+    resource: string,
+    resourceId: string,
+    event: string,
+    before: unknown,
+    after: unknown,
+  ): Promise<void> {
+    return this.append(
+      manager,
+      actor ?? {},
+      resource,
+      resourceId,
+      event,
+      { before, after },
+      'sistema',
+    );
+  }
+
   async append(
     manager: EntityManager,
     actor: AuditActor,

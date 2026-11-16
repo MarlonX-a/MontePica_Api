@@ -1,9 +1,7 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
@@ -27,8 +25,6 @@ import { type PaymentListDto } from './dto/payment-list.dto.js';
 import { PaymentHistory } from './entities/payment-history.entity.js';
 import { Payment } from './entities/payment.entity.js';
 import {
-  AuthorizeFindUsuarioNextRow,
-  AuthorizeFindUsuarioRow,
   CollectFindCajaRow,
   CollectFindCuentaConsumoRow,
   CollectFindLiquidacionNextRow,
@@ -59,17 +55,10 @@ export class PaymentsService {
     m: EntityManager,
     actor: AuthenticatedRequestContext,
   ) {
-    const [session] = await this.authorizeFindUsuario(m, {
-      userId: actor.userId,
-      sessionId: actor.sessionId,
+    await this.authorization.requirePermission(m, actor, 'payments.collect', {
+      unauthorizedMessage: 'Sesión no válida.',
+      permissionMessage: 'No tienes permiso para cobrar.',
     });
-    if (!session || !session.activo || session.revocada_en || !session.valid)
-      throw new UnauthorizedException('Sesión no válida.');
-    const [permission] = await this.authorizeFindUsuarioNext(m, {
-      userId: actor.userId,
-    });
-    if (!permission)
-      throw new ForbiddenException('No tienes permiso para cobrar.');
   }
 
   async collect(
@@ -242,31 +231,6 @@ export class PaymentsService {
       page: query.page,
       limit: query.limit,
     };
-  }
-
-  private async authorizeFindUsuario(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<AuthorizeFindUsuarioRow[]> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-    );
-    return row ? [row] : [];
-  }
-
-  private async authorizeFindUsuarioNext(
-    manager: EntityManager,
-    input: { userId: string },
-  ): Promise<AuthorizeFindUsuarioNextRow[]> {
-    return (await this.authorization.hasPermission(
-      manager,
-      input.userId,
-      'payments.collect',
-    ))
-      ? [{ '1': '1' }]
-      : [];
   }
 
   private collectFindLiquidacion(

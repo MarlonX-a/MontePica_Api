@@ -4,16 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  type EntityManager,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { CashClosure } from '../cash/entities/cash-closure.entity.js';
 import { CashRegister } from '../cash/entities/cash-register.entity.js';
 import { AuditService } from '../common/audit/audit.service.js';
+import { throwConflictIfUnique } from '../common/database/unique-conflict.js';
 import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
 import { AuthorizationService } from '../common/identity/authorization.service.js';
 import { TransactionLocksService } from '../common/transactions/transaction-locks.service.js';
@@ -22,6 +18,7 @@ import { ExceptionalDayOpening } from './entities/exceptional-day-opening.entity
 import { OperatingDayClosure } from './entities/operating-day-closure.entity.js';
 import { OperatingDay } from './entities/operating-day.entity.js';
 import { OperationsSettings } from './entities/operations-settings.entity.js';
+import { OperationsSettingsService } from './operations-settings.service.js';
 import {
   OpenOperatingDayRow,
   OperatingDayRow,
@@ -31,7 +28,6 @@ import {
   GetCurrentFindJornadaOperativaRow,
   GetCurrentFindOperationRow,
   GetSettingsFindConfiguracionOperativaRow,
-  GetSettingsWithFindConfiguracionOperativaRow,
   OpenDayInsertJornadaOperativaRow,
 } from './types/operations.types.js';
 
@@ -54,6 +50,7 @@ export class OperatingDaysService {
     private readonly auditRecords: AuditService,
     private readonly authorization: AuthorizationService,
     private readonly locks: TransactionLocksService,
+    private readonly settingsService: OperationsSettingsService,
   ) {}
 
   private async getSettings() {
@@ -88,8 +85,8 @@ export class OperatingDaysService {
   async openDay(actor: AuthenticatedRequestContext) {
     try {
       return await this.dataSource.transaction(async (manager) => {
-        await this.lockOperations(manager);
-        const settings = await this.getSettingsWith(manager);
+        await this.locks.acquire(manager);
+        const settings = await this.settingsService.getSettingsWith(manager);
         const pendingDays = await this.findOpenDayIds(
           manager,
           settings.timeZone,
@@ -102,19 +99,18 @@ export class OperatingDaysService {
           timeZone: settings.timeZone,
           userId: actor.userId,
         });
-        await this.audit(
+        await this.auditRecords.append(
           manager,
           actor,
           'jornada',
           rows[0].id,
           'operations.day_opened',
-          {},
-          rows[0],
+          { before: {}, after: rows[0] },
         );
         return rows[0];
       });
     } catch (error) {
-      this.throwConflictForUnique(
+      throwConflictIfUnique(
         error,
         'Ya existe una jornada para la fecha operativa actual.',
       );
@@ -138,8 +134,8 @@ export class OperatingDaysService {
         authorize: (manager) =>
           this.authorizeOperatingAction(manager, actor, 'exception'),
         action: async (manager) => {
-          await this.lockOperations(manager);
-          const settings = await this.getSettingsWith(manager);
+          await this.locks.acquire(manager);
+          const settings = await this.settingsService.getSettingsWith(manager);
           const pendingDays = await this.findOpenDayIds(
             manager,
             settings.timeZone,
@@ -207,46 +203,6 @@ export class OperatingDaysService {
         adminMessage: 'Solo un administrador puede realizar esta operación.',
       },
     );
-  }
-
-  private async getSettingsWith(
-    manager: import('typeorm').EntityManager,
-  ): Promise<SettingsRow> {
-    const rows = await this.getSettingsWithFindConfiguracionOperativa(manager);
-    return rows[0] as SettingsRow;
-  }
-
-  private async lockOperations(manager: import('typeorm').EntityManager) {
-    await this.lockOperationsFindOperation(manager);
-  }
-
-  private async audit(
-    manager: import('typeorm').EntityManager,
-    actor: AuthenticatedRequestContext,
-    resourceType: string,
-    resourceId: string | null,
-    event: string,
-    before: unknown,
-    after: unknown,
-  ) {
-    await this.auditRecords.append(
-      manager,
-      actor,
-      resourceType,
-      resourceId,
-      event,
-      { before, after },
-    );
-  }
-
-  private throwConflictForUnique(error: unknown, message: string): void {
-    if (
-      error instanceof QueryFailedError &&
-      (error as QueryFailedError & { driverError?: { code?: string } })
-        .driverError?.code === '23505'
-    ) {
-      throw new ConflictException(message);
-    }
   }
 
   private getSettingsFindConfiguracionOperativa(
@@ -353,32 +309,7 @@ export class OperatingDaysService {
       .then((result) => result.raw);
   }
 
-  private getSettingsWithFindConfiguracionOperativa(
-    manager: EntityManager,
-  ): Promise<GetSettingsWithFindConfiguracionOperativaRow[]> {
-    return manager
-      .getRepository(OperationsSettings)
-      .createQueryBuilder('configuracion_operativa')
-      .select([
-        '"id_configuracion" AS id',
-        '"zona_horaria" AS "timeZone"',
-        'to_char("hora_apertura", \'HH24:MI\') AS "openingTime"',
-        'to_char("hora_cierre", \'HH24:MI\') AS "closingTime"',
-        '"edicion_local_seg" AS "localOrderEditSeconds"',
-        '"actualizada_en" AS "updatedAt"',
-      ])
-      .where('"id_configuracion" = 1')
-      .setLock('pessimistic_write', undefined, undefined)
-      .getRawMany<GetSettingsWithFindConfiguracionOperativaRow>();
-  }
-
-  private async lockOperationsFindOperation(
-    manager: EntityManager,
-  ): Promise<void> {
-    await this.locks.acquire(manager);
-  }
-
-  private async findDay(
+  async findDay(
     manager: EntityManager,
     id: string,
   ): Promise<OperatingDayRow | undefined> {

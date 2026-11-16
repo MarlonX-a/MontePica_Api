@@ -8,21 +8,17 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  type EntityManager,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { ConsumptionAccount } from '../accounts/entities/consumption-account.entity.js';
 import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { AuditService } from '../common/audit/audit.service.js';
+import { throwConflictIfUnique } from '../common/database/unique-conflict.js';
 import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
 import { AuthorizationService } from '../common/identity/authorization.service.js';
 import { OperationalContextService } from '../common/transactions/operational-context.service.js';
 import { TransactionLocksService } from '../common/transactions/transaction-locks.service.js';
 import { OperatingDay } from '../operations/entities/operating-day.entity.js';
-import { OperationsSettings } from '../operations/entities/operations-settings.entity.js';
+import { OperationsSettingsService } from '../operations/operations-settings.service.js';
 import {
   AuthorizeCashClosureFindRolPermisoRow,
   CashSnapshotFindPagoRow,
@@ -34,7 +30,6 @@ import {
   GetCashClosureFindCierreCajaRow,
   GetCashClosureWithFindCierreCajaRow,
   GetCashSummaryFindPagoRow,
-  GetSettingsWithFindConfiguracionOperativaRow,
   OpenCashFindJornadaOperativaRow,
   OpenCashInsertCajaRow,
   PendingCashDayRefundsFindDevolucionRow,
@@ -54,15 +49,6 @@ import { OpenCashRegisterDto } from './dto/open-cash-register.dto.js';
 import { CashClosure } from './entities/cash-closure.entity.js';
 import { CashRegister } from './entities/cash-register.entity.js';
 
-type SettingsRow = {
-  id: number;
-  timeZone: string;
-  openingTime: string;
-  closingTime: string;
-  localOrderEditSeconds: number;
-  updatedAt: Date;
-};
-
 @Injectable()
 export class CashService {
   constructor(
@@ -75,6 +61,7 @@ export class CashService {
     private readonly operationalContext: OperationalContextService,
     private readonly authorization: AuthorizationService,
     private readonly locks: TransactionLocksService,
+    private readonly settingsService: OperationsSettingsService,
   ) {}
 
   async getCashSummary(cashRegisterId: string) {
@@ -357,8 +344,8 @@ export class CashService {
   async openCash(dto: OpenCashRegisterDto, actor: AuthenticatedRequestContext) {
     try {
       return await this.dataSource.transaction(async (manager) => {
-        await this.lockOperations(manager);
-        const settings = await this.getSettingsWith(manager);
+        await this.locks.acquire(manager);
+        const settings = await this.settingsService.getSettingsWith(manager);
         const days = await this.openCashFindJornadaOperativa(manager, {
           timeZone: settings.timeZone,
         });
@@ -372,63 +359,22 @@ export class CashService {
           openingAmountCents: dto.openingAmountCents,
           userId: actor.userId,
         });
-        await this.audit(
+        await this.auditRecords.append(
           manager,
           actor,
           'caja',
           rows[0].id,
           'operations.cash_opened',
-          {},
-          rows[0],
+          { before: {}, after: rows[0] },
         );
         return rows[0];
       });
     } catch (error) {
-      this.throwConflictForUnique(
+      throwConflictIfUnique(
         error,
         'La jornada actual ya tiene una caja abierta.',
       );
       throw error;
-    }
-  }
-
-  private async getSettingsWith(
-    manager: import('typeorm').EntityManager,
-  ): Promise<SettingsRow> {
-    const rows = await this.getSettingsWithFindConfiguracionOperativa(manager);
-    return rows[0] as SettingsRow;
-  }
-
-  private async lockOperations(manager: import('typeorm').EntityManager) {
-    await this.lockOperationsFindOperation(manager);
-  }
-
-  private async audit(
-    manager: import('typeorm').EntityManager,
-    actor: AuthenticatedRequestContext,
-    resourceType: string,
-    resourceId: string | null,
-    event: string,
-    before: unknown,
-    after: unknown,
-  ) {
-    await this.auditRecords.append(
-      manager,
-      actor,
-      resourceType,
-      resourceId,
-      event,
-      { before, after },
-    );
-  }
-
-  private throwConflictForUnique(error: unknown, message: string): void {
-    if (
-      error instanceof QueryFailedError &&
-      (error as QueryFailedError & { driverError?: { code?: string } })
-        .driverError?.code === '23505'
-    ) {
-      throw new ConflictException(message);
     }
   }
 
@@ -715,31 +661,6 @@ export class CashService {
       )
       .execute()
       .then((result) => result.raw);
-  }
-
-  private getSettingsWithFindConfiguracionOperativa(
-    manager: EntityManager,
-  ): Promise<GetSettingsWithFindConfiguracionOperativaRow[]> {
-    return manager
-      .getRepository(OperationsSettings)
-      .createQueryBuilder('configuracion_operativa')
-      .select([
-        '"id_configuracion" AS id',
-        '"zona_horaria" AS "timeZone"',
-        'to_char("hora_apertura", \'HH24:MI\') AS "openingTime"',
-        'to_char("hora_cierre", \'HH24:MI\') AS "closingTime"',
-        '"edicion_local_seg" AS "localOrderEditSeconds"',
-        '"actualizada_en" AS "updatedAt"',
-      ])
-      .where('"id_configuracion" = 1')
-      .setLock('pessimistic_write', undefined, undefined)
-      .getRawMany<GetSettingsWithFindConfiguracionOperativaRow>();
-  }
-
-  private async lockOperationsFindOperation(
-    manager: EntityManager,
-  ): Promise<void> {
-    await this.locks.acquire(manager);
   }
 
   private async queryListCashRegisters(

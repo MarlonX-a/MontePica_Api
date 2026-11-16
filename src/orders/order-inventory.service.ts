@@ -16,6 +16,36 @@ import {
 
 @Injectable()
 export class OrderInventoryService {
+  insertOrderItem(
+    manager: EntityManager,
+    input: {
+      versionId: string;
+      productId: string;
+      quantity: number;
+      unitPriceCents: number;
+      tracksInventory: boolean;
+      notes: string | null;
+    },
+  ): Promise<Array<{ id: string }>> {
+    return manager
+      .getRepository(OrderItem)
+      .createQueryBuilder()
+      .insert()
+      .values([
+        {
+          id_version: input.versionId,
+          id_producto: input.productId,
+          cantidad: input.quantity,
+          precio_unitario_ctvs: input.unitPriceCents,
+          controla_stock_snapshot: input.tracksInventory,
+          observaciones: input.notes,
+        },
+      ])
+      .returning('id_detalle AS id')
+      .execute()
+      .then((result) => result.raw as Array<{ id: string }>);
+  }
+
   lockAvailableProducts(
     manager: EntityManager,
     input: { productIds: string[] },

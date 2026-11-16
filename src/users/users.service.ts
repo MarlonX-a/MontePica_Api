@@ -5,12 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  type EntityManager,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { UserSession } from '../auth/entities/user-session.entity.js';
 import {
@@ -19,6 +14,7 @@ import {
   normalizePhone,
 } from '../auth/password.util.js';
 import { AuditService } from '../common/audit/audit.service.js';
+import { throwConflictIfUnique } from '../common/database/unique-conflict.js';
 import { ListAdminQueryDto } from '../common/dto/list-admin-query.dto.js';
 import { Client } from '../common/identity/entities/client.entity.js';
 import { TransactionLocksService } from '../common/transactions/transaction-locks.service.js';
@@ -96,7 +92,7 @@ export class UsersService {
             phone,
           });
         const response = await this.getUserWith(manager, id);
-        await this.audit(
+        await this.auditRecords.appendChange(
           manager,
           actor,
           'usuario',
@@ -108,7 +104,7 @@ export class UsersService {
         return response;
       });
     } catch (error) {
-      this.handleUnique(error, 'Ya existe una cuenta con ese correo.');
+      throwConflictIfUnique(error, 'Ya existe una cuenta con ese correo.');
       throw error;
     }
   }
@@ -191,7 +187,7 @@ export class UsersService {
             id,
           });
         const updated = await this.getUserWith(manager, id);
-        await this.audit(
+        await this.auditRecords.appendChange(
           manager,
           actor,
           'usuario',
@@ -203,7 +199,7 @@ export class UsersService {
         return updated;
       });
     } catch (error) {
-      this.handleUnique(error, 'Ya existe una cuenta con ese correo.');
+      throwConflictIfUnique(error, 'Ya existe una cuenta con ese correo.');
       throw error;
     }
   }
@@ -242,35 +238,6 @@ export class UsersService {
       phone: u.phone,
       clientId: u.clientId,
     };
-  }
-
-  private async audit(
-    m: import('typeorm').EntityManager,
-    actor: Actor,
-    type: string,
-    id: string,
-    event: string,
-    before: unknown,
-    after: unknown,
-  ) {
-    await this.auditRecords.append(
-      m,
-      actor ?? {},
-      type,
-      id,
-      event,
-      { before, after },
-      'sistema',
-    );
-  }
-
-  private handleUnique(error: unknown, message: string) {
-    if (
-      error instanceof QueryFailedError &&
-      (error as QueryFailedError & { driverError?: { code?: string } })
-        .driverError?.code === '23505'
-    )
-      throw new ConflictException(message);
   }
 
   private getUserFindUsuario(

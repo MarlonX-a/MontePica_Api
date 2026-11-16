@@ -6,6 +6,7 @@ import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
 import { ClientIdentityModule } from '../common/identity/client-identity.module.js';
 import { IdentityModule } from '../common/identity/identity.module.js';
 import { TransactionsModule } from '../common/transactions/transactions.module.js';
+import { PointsLedgerModule } from './points-ledger.module.js';
 import { PointsMovement } from './entities/points-movement.entity.js';
 import { PointsController } from './points.controller.js';
 import { PointsService } from './points.service.js';
@@ -18,6 +19,7 @@ import { PointsService } from './points.service.js';
     AuditModule,
     TransactionsModule,
     IdentityModule,
+    PointsLedgerModule,
     TypeOrmModule.forFeature([PointsMovement]),
   ],
   controllers: [PointsController],

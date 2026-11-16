@@ -215,6 +215,20 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       return { table, visit, qr };
     }
 
+    async function advanceOrder(orderId: string, keyPrefix: string) {
+      await forEachSequential(
+        ['start-preparation', 'ready', 'deliver'],
+        async (action) => {
+          await request(http())
+            .post(`/api/v1/admin/orders/${orderId}/${action}`)
+            .set('Authorization', auth(tokens.worker))
+            .set('Idempotency-Key', `${keyPrefix}-${action}`)
+            .send({ expectedVersion: 1 })
+            .expect(200);
+        },
+      );
+    }
+
     async function createApprovedParticipant(
       visitId: string,
       qrToken: string,
@@ -1951,17 +1965,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'payment-race-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      await forEachSequential(
-        ['start-preparation', 'ready', 'deliver'],
-        async (action) => {
-          await request(http())
-            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-            .set('Authorization', auth(tokens.worker))
-            .set('Idempotency-Key', `payment-race-${action}`)
-            .send({ expectedVersion: 1 })
-            .expect(200);
-        },
-      );
+      await advanceOrder(order.body.id, 'payment-race');
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2019,17 +2023,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'transfer-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      await forEachSequential(
-        ['start-preparation', 'ready', 'deliver'],
-        async (action) => {
-          await request(http())
-            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-            .set('Authorization', auth(tokens.worker))
-            .set('Idempotency-Key', `transfer-${action}`)
-            .send({ expectedVersion: 1 })
-            .expect(200);
-        },
-      );
+      await advanceOrder(order.body.id, 'transfer');
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2179,17 +2173,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'transfer-dup-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      await forEachSequential(
-        ['start-preparation', 'ready', 'deliver'],
-        async (action) => {
-          await request(http())
-            .post(`/api/v1/admin/orders/${o2.body.id}/${action}`)
-            .set('Authorization', auth(tokens.worker))
-            .set('Idempotency-Key', `transfer-dup-${action}`)
-            .send({ expectedVersion: 1 })
-            .expect(200);
-        },
-      );
+      await advanceOrder(o2.body.id, 'transfer-dup');
       const s2 = await request(http())
         .post(`/api/v1/admin/accounts/${o2.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2242,17 +2226,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'zero-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      await forEachSequential(
-        ['start-preparation', 'ready', 'deliver'],
-        async (action) => {
-          await request(http())
-            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-            .set('Authorization', auth(tokens.worker))
-            .set('Idempotency-Key', `zero-${action}`)
-            .send({ expectedVersion: 1 })
-            .expect(200);
-        },
-      );
+      await advanceOrder(order.body.id, 'zero');
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2342,17 +2316,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'unfinished-settlement')
         .send({})
         .expect(409);
-      await forEachSequential(
-        ['start-preparation', 'ready', 'deliver'],
-        async (action) => {
-          await request(http())
-            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-            .set('Authorization', auth(tokens.worker))
-            .set('Idempotency-Key', `registered-${action}`)
-            .send({ expectedVersion: 1 })
-            .expect(200);
-        },
-      );
+      await advanceOrder(order.body.id, 'registered');
       const result = await request(http())
         .post(`/api/v1/admin/accounts/${accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))
@@ -2508,17 +2472,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'registered-transfer-order')
         .send({ items: [{ productId: product.id_producto, quantity: 1 }] })
         .expect(201);
-      await forEachSequential(
-        ['start-preparation', 'ready', 'deliver'],
-        async (action) => {
-          await request(http())
-            .post(`/api/v1/admin/orders/${order.body.id}/${action}`)
-            .set('Authorization', auth(tokens.worker))
-            .set('Idempotency-Key', `registered-transfer-${action}`)
-            .send({ expectedVersion: 1 })
-            .expect(200);
-        },
-      );
+      await advanceOrder(order.body.id, 'registered-transfer');
       const settlement = await request(http())
         .post(`/api/v1/admin/accounts/${order.body.accountId}/settlements`)
         .set('Authorization', auth(tokens.worker))

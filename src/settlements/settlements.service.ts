@@ -1,10 +1,8 @@
 import { forEachSequential } from '../common/async/for-each-sequential.js';
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
@@ -26,8 +24,6 @@ import { type SettlementListDto } from './dto/settlement-list.dto.js';
 import { SettlementItem } from './entities/settlement-item.entity.js';
 import { Settlement } from './entities/settlement.entity.js';
 import {
-  AuthorizeFindUsuarioNextRow,
-  AuthorizeFindUsuarioRow,
   CancelFindCuentaConsumoRow,
   CancelFindLiquidacionNextRow,
   CancelFindLiquidacionRow,
@@ -58,19 +54,10 @@ export class SettlementsService {
     m: EntityManager,
     actor: AuthenticatedRequestContext,
   ) {
-    const [user] = await this.authorizeFindUsuario(m, {
-      userId: actor.userId,
-      sessionId: actor.sessionId,
+    await this.authorization.requirePermission(m, actor, 'settlements.manage', {
+      unauthorizedMessage: 'Sesión no válida.',
+      permissionMessage: 'No tienes permiso para realizar esta acción.',
     });
-    if (!user || !user.activo || user.revocada_en || !user.valid)
-      throw new UnauthorizedException('Sesión no válida.');
-    const [permission] = await this.authorizeFindUsuarioNext(m, {
-      userId: actor.userId,
-    });
-    if (!permission)
-      throw new ForbiddenException(
-        'No tienes permiso para realizar esta acción.',
-      );
   }
 
   async settlement(
@@ -263,31 +250,6 @@ export class SettlementsService {
         },
       },
     );
-  }
-
-  private async authorizeFindUsuario(
-    manager: EntityManager,
-    input: { userId: string; sessionId: string },
-  ): Promise<AuthorizeFindUsuarioRow[]> {
-    const row = await this.authorization.lockSession(
-      manager,
-      input.userId,
-      input.sessionId,
-    );
-    return row ? [row] : [];
-  }
-
-  private async authorizeFindUsuarioNext(
-    manager: EntityManager,
-    input: { userId: string },
-  ): Promise<AuthorizeFindUsuarioNextRow[]> {
-    return (await this.authorization.hasPermission(
-      manager,
-      input.userId,
-      'settlements.manage',
-    ))
-      ? [{ '1': '1' }]
-      : [];
   }
 
   private settlementFindPago(

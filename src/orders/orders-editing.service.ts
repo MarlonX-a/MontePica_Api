@@ -28,7 +28,6 @@ import {
   EditFindLiquidacionRow,
   EditFindPedidoNextRow,
   EditFindPedidoRow,
-  EditInsertDetallePedidoRow,
   EditInsertVersionPedidoRow,
 } from './types/orders.types.js';
 
@@ -172,12 +171,12 @@ export class OrdersEditingService {
               (p) => p.id === item.productId.toLowerCase(),
             )!;
             const snapshot = old.find((p) => p.id === product.id) ?? product;
-            const [detail] = await this.editInsertDetallePedido(m, {
-              id: version.id,
-              id2: product.id,
+            const [detail] = await this.inventoryOperations.insertOrderItem(m, {
+              versionId: version.id,
+              productId: product.id,
               quantity: item.quantity,
-              price: snapshot.price,
-              tracks: snapshot.tracks,
+              unitPriceCents: snapshot.price,
+              tracksInventory: snapshot.tracks,
               notes: item.notes ?? null,
             });
             await this.editInsertAsignacionConsumo(m, {
@@ -344,36 +343,6 @@ export class OrdersEditingService {
         },
       ])
       .returning('id_version AS id')
-      .execute()
-      .then((result) => result.raw);
-  }
-
-  private editInsertDetallePedido(
-    manager: EntityManager,
-    input: {
-      id: string;
-      id2: string;
-      quantity: number;
-      price: number;
-      tracks: boolean;
-      notes: string | null;
-    },
-  ): Promise<EditInsertDetallePedidoRow[]> {
-    return manager
-      .getRepository(OrderItem)
-      .createQueryBuilder()
-      .insert()
-      .values([
-        {
-          id_version: input.id,
-          id_producto: input.id2,
-          cantidad: input.quantity,
-          precio_unitario_ctvs: input.price,
-          controla_stock_snapshot: input.tracks,
-          observaciones: input.notes,
-        },
-      ])
-      .returning('id_detalle AS id')
       .execute()
       .then((result) => result.raw);
   }

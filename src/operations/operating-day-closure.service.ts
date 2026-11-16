@@ -9,7 +9,6 @@ import { type EntityManager, Repository } from 'typeorm';
 import { ConsumptionAccount } from '../accounts/entities/consumption-account.entity.js';
 import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { CancellationRequest } from '../cancellations/entities/cancellation-request.entity.js';
-import { CashClosure } from '../cash/entities/cash-closure.entity.js';
 import { CashRegister } from '../cash/entities/cash-register.entity.js';
 import { AuditService } from '../common/audit/audit.service.js';
 import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
@@ -31,12 +30,12 @@ import { type CloseOperatingDayDto } from './dto/close-operating-day.dto.js';
 import { type OperatingDayPreviewQueryDto } from './dto/operating-day-preview-query.dto.js';
 import { OperatingDayClosure } from './entities/operating-day-closure.entity.js';
 import { OperatingDay } from './entities/operating-day.entity.js';
+import { OperatingDaysService } from './operating-days.service.js';
 import {
   OperatingDayBlockerRow,
   OperatingDayCleanupCountsRow,
   OperatingDayClosureRow,
   OperatingDayCountsRow,
-  OperatingDayRow,
 } from './types/operating-days.types.js';
 
 @Injectable()
@@ -51,10 +50,11 @@ export class OperatingDayClosureService {
     private readonly auditRecords: AuditService,
     private readonly authorization: AuthorizationService,
     private readonly locks: TransactionLocksService,
+    private readonly operatingDays: OperatingDaysService,
   ) {}
 
   async getOperatingDayClosure(id: string) {
-    const day = await this.findDay(this.records.manager, id);
+    const day = await this.operatingDays.findDay(this.records.manager, id);
     if (!day) throw new NotFoundException('Jornada no encontrada.');
     const closure = await this.findClosure(this.records.manager, id);
     if (!closure)
@@ -66,7 +66,7 @@ export class OperatingDayClosureService {
     id: string,
     query: OperatingDayPreviewQueryDto,
   ) {
-    const day = await this.findDay(this.records.manager, id);
+    const day = await this.operatingDays.findDay(this.records.manager, id);
     if (!day) throw new NotFoundException('Jornada no encontrada.');
     const [counts, blockers, cleanupActions, pendingRefunds] =
       await Promise.all([
@@ -141,7 +141,7 @@ export class OperatingDayClosureService {
               'Quedaron reservas de canje sin resolver; el cierre se revirtió.',
             );
 
-          const current = await this.findDay(manager, id);
+          const current = await this.operatingDays.findDay(manager, id);
           const summary: Record<string, number> = {
             ...before,
             ...visitCleanup,
@@ -218,35 +218,6 @@ export class OperatingDayClosureService {
     manager: EntityManager,
   ): Promise<void> {
     await this.locks.acquire(manager);
-  }
-
-  private async findDay(
-    manager: EntityManager,
-    id: string,
-  ): Promise<OperatingDayRow | undefined> {
-    const [row] = await manager
-      .getRepository(OperatingDay)
-      .createQueryBuilder('j')
-      .select([
-        'j.id_jornada AS id',
-        'j.fecha_operativa::text AS "businessDate"',
-        'j.estado AS status',
-        'j.abierta_en AS "openedAt"',
-        'j.abierta_por AS "openedBy"',
-        'cj.id_cierre AS "closureId"',
-        'cj.cerrado_en AS "closedAt"',
-        'cj.cerrado_por AS "closedBy"',
-        'c.id_caja AS "cashRegisterId"',
-        'c.estado AS "cashStatus"',
-        'cc.id_cierre AS "cashClosureId"',
-      ])
-      .leftJoin(OperatingDayClosure, 'cj', 'cj.id_jornada=j.id_jornada')
-      .leftJoin(CashRegister, 'c', 'c.id_jornada=j.id_jornada')
-      .leftJoin(CashClosure, 'cc', 'cc.id_caja=c.id_caja')
-      .where('j.id_jornada=:id')
-      .setParameters({ id })
-      .getRawMany();
-    return row;
   }
 
   private async findClosure(

@@ -1,18 +1,13 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  type EntityManager,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { AuditService } from '../common/audit/audit.service.js';
+import { throwConflictIfUnique } from '../common/database/unique-conflict.js';
 import { ListAdminQueryDto } from '../common/dto/list-admin-query.dto.js';
 import {
   CreateCategoryInsertCategoriaRow,
@@ -29,8 +24,6 @@ import { UpdateAdminProductDto } from './dto/update-admin-product.dto.js';
 import { UpdateCategoryDto } from './dto/update-category.dto.js';
 import { Category } from './entities/category.entity.js';
 import { Product } from './entities/product.entity.js';
-
-type Actor = AuthenticatedRequestContext | null;
 
 const cleanName = (value: string) => {
   const name = value.trim().normalize('NFC').replace(/\s+/g, ' ');
@@ -81,7 +74,7 @@ export class CatalogAdminService {
         });
         const id = r[0].id_categoria;
         const item = await this.getCategoryWith(m, id);
-        await this.audit(
+        await this.auditRecords.appendChange(
           m,
           actor,
           'categoria',
@@ -93,7 +86,7 @@ export class CatalogAdminService {
         return item;
       });
     } catch (e) {
-      this.handleUnique(e, 'Ya existe una categoría con ese nombre.');
+      throwConflictIfUnique(e, 'Ya existe una categoría con ese nombre.');
       throw e;
     }
   }
@@ -121,7 +114,7 @@ export class CatalogAdminService {
           sortOrder: dto.sortOrder ?? before.sortOrder,
         });
         const after = await this.getCategoryWith(m, id);
-        await this.audit(
+        await this.auditRecords.appendChange(
           m,
           actor,
           'categoria',
@@ -133,7 +126,7 @@ export class CatalogAdminService {
         return after;
       });
     } catch (e) {
-      this.handleUnique(e, 'Ya existe una categoría con ese nombre.');
+      throwConflictIfUnique(e, 'Ya existe una categoría con ese nombre.');
       throw e;
     }
   }
@@ -176,7 +169,7 @@ export class CatalogAdminService {
         });
         const id = r[0].id_producto;
         const after = await this.getProductWith(m, id);
-        await this.audit(
+        await this.auditRecords.appendChange(
           m,
           actor,
           'producto',
@@ -188,7 +181,7 @@ export class CatalogAdminService {
         return after;
       });
     } catch (e) {
-      this.handleUnique(e, 'Ya existe un producto con ese SKU.');
+      throwConflictIfUnique(e, 'Ya existe un producto con ese SKU.');
       throw e;
     }
   }
@@ -223,7 +216,7 @@ export class CatalogAdminService {
           sortOrder: dto.sortOrder ?? before.sortOrder,
         });
         const after = await this.getProductWith(m, id);
-        await this.audit(
+        await this.auditRecords.appendChange(
           m,
           actor,
           'producto',
@@ -235,7 +228,7 @@ export class CatalogAdminService {
         return after;
       });
     } catch (e) {
-      this.handleUnique(e, 'Conflicto al guardar el producto.');
+      throwConflictIfUnique(e, 'Conflicto al guardar el producto.');
       throw e;
     }
   }
@@ -252,7 +245,7 @@ export class CatalogAdminService {
         visible,
       });
       const after = await this.getProductWith(m, id);
-      await this.audit(
+      await this.auditRecords.appendChange(
         m,
         actor,
         'producto',
@@ -280,35 +273,6 @@ export class CatalogAdminService {
     const r = await this.getProductFindProducto(m, { id });
     if (!r[0]) throw new NotFoundException('Producto no encontrado.');
     return r[0];
-  }
-
-  private async audit(
-    m: import('typeorm').EntityManager,
-    actor: Actor,
-    type: string,
-    id: string,
-    event: string,
-    before: unknown,
-    after: unknown,
-  ) {
-    await this.auditRecords.append(
-      m,
-      actor ?? {},
-      type,
-      id,
-      event,
-      { before, after },
-      'sistema',
-    );
-  }
-
-  private handleUnique(error: unknown, message: string) {
-    if (
-      error instanceof QueryFailedError &&
-      (error as QueryFailedError & { driverError?: { code?: string } })
-        .driverError?.code === '23505'
-    )
-      throw new ConflictException(message);
   }
 
   private getCategoryFindCategoria(

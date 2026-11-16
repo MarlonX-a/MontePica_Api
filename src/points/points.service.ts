@@ -1,9 +1,7 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
-  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,18 +10,16 @@ import { type AuthenticatedRequestContext } from '../auth/auth.types.js';
 import { AuditService } from '../common/audit/audit.service.js';
 import { ParticipationIdempotencyService } from '../common/idempotency/participation-idempotency.service.js';
 import { AuthorizationService } from '../common/identity/authorization.service.js';
-import { Client } from '../common/identity/entities/client.entity.js';
 import { OperationalContextService } from '../common/transactions/operational-context.service.js';
 import { RedemptionRequest } from '../redemptions/entities/redemption-request.entity.js';
 import { PointsAccrual } from './entities/points-accrual.entity.js';
 import { PointsMovement } from './entities/points-movement.entity.js';
 import { PointsSettings } from './entities/points-settings.entity.js';
+import { PointsBalanceService } from './points-balance.service.js';
 import {
-  BalanceFindMovimientoPuntosRow,
   ConfigureFindRolPermisoRow,
   ConfigureInsertConfiguracionPuntosRow,
   CurrentFindConfiguracionPuntosRow,
-  RequireClientFindClienteRow,
 } from './types/points.types.js';
 
 @Injectable()
@@ -35,6 +31,7 @@ export class PointsService {
     private readonly auditLog: AuditService,
     private readonly operationalContext: OperationalContextService,
     private readonly authorization: AuthorizationService,
+    private readonly balanceService: PointsBalanceService,
   ) {}
 
   async current(m: EntityManager = this.records.manager) {
@@ -97,40 +94,14 @@ export class PointsService {
   }
 
   async balance(clientId: string, m: EntityManager = this.records.manager) {
-    await this.requireClient(clientId, m);
-    const [r] = await this.balanceFindMovimientoPuntos(m, {
-      clientId,
-    });
-    if (
-      ![r.balance, r.pending, r.reserved].every((v) =>
-        Number.isSafeInteger(Number(v)),
-      )
-    )
-      throw new ConflictException('Saldo fuera del rango seguro.');
-    const balance = Number(r.balance),
-      reservedPoints = Number(r.reserved);
-    const available = BigInt(r.balance) - BigInt(r.reserved);
-    return {
-      balance,
-      pendingPoints: Number(r.pending),
-      reservedPoints,
-      availablePoints: Number(available > 0n ? available : 0n),
-    };
-  }
-
-  private async requireClient(
-    id: string,
-    m: EntityManager = this.records.manager,
-  ) {
-    const [c] = await this.requireClientFindCliente(m, { id });
-    if (!c) throw new NotFoundException('Cliente no encontrado.');
+    return this.balanceService.getBalance(clientId, m);
   }
 
   async movements(
     clientId: string,
     q: { page: number; limit: number; type?: string; paymentId?: string },
   ) {
-    await this.requireClient(clientId);
+    await this.balanceService.requireClient(clientId, this.records.manager);
     return this.queryMovements(this.records.manager, clientId, q);
   }
 
@@ -180,33 +151,6 @@ export class PointsService {
       .returning('id_configuracion id')
       .execute()
       .then((result) => result.raw);
-  }
-
-  private balanceFindMovimientoPuntos(
-    manager: EntityManager,
-    input: { clientId: string },
-  ): Promise<BalanceFindMovimientoPuntosRow[]> {
-    return manager
-      .createQueryBuilder()
-      .select(
-        "COALESCE((SELECT sum(puntos) FROM movimiento_puntos WHERE id_cliente=:clientId),0)::text balance, COALESCE((SELECT sum(puntos) FROM acumulacion_puntos WHERE id_cliente=:clientId AND estado='pending'),0)::text pending, COALESCE((SELECT sum(puntos) FROM reserva_puntos_canje WHERE id_cliente=:clientId AND estado='active'),0)::text reserved",
-      )
-      .from('(SELECT 1)', '_singleton')
-      .setParameters({ clientId: input.clientId })
-      .getRawMany<BalanceFindMovimientoPuntosRow>();
-  }
-
-  private requireClientFindCliente(
-    manager: EntityManager,
-    input: { id: string },
-  ): Promise<RequireClientFindClienteRow[]> {
-    return manager
-      .getRepository(Client)
-      .createQueryBuilder('cliente')
-      .select('1 AS "1"')
-      .where('id_cliente=:id')
-      .setParameters({ id: input.id })
-      .getRawMany<RequireClientFindClienteRow>();
   }
 
   private async queryMovements(
