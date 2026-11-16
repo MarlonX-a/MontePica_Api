@@ -66,11 +66,12 @@ export class CatalogService {
       builder.andWhere('category.id = :categoryId', {
         categoryId: query.categoryId,
       });
-    if (query.search?.trim())
+    const search = query.search?.trim();
+    if (search)
       builder.andWhere(
         String.raw`(product.name ILIKE :search ESCAPE E'\\' OR product.description ILIKE :search ESCAPE E'\\')`,
         {
-          search: `%${query.search.trim().replace(/[\\%_]/g, String.raw`\$&`)}%`,
+          search: `%${search.replace(/[\\%_]/g, '\\$&')}%`,
         },
       );
     return builder
