@@ -71,7 +71,7 @@ export class CatalogService {
       builder.andWhere(
         String.raw`(product.name ILIKE :search ESCAPE E'\\' OR product.description ILIKE :search ESCAPE E'\\')`,
         {
-          search: `%${search.replace(/[\\%_]/g, '\\$&')}%`,
+          search: `%${search.replace(/[\\%_]/g, String.raw`\$&`)}%`,
         },
       );
     return builder
