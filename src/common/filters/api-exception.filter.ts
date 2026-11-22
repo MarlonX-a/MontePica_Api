@@ -37,9 +37,11 @@ export class ApiExceptionFilter implements ExceptionFilter {
         }
       }
     } else {
-      this.logger.error(
-        exception instanceof Error ? exception.stack : 'Excepción desconocida',
-      );
+      const route =
+        typeof request.route?.path === 'string'
+          ? request.route.path
+          : 'ruta desconocida';
+      this.logger.error(`Error no controlado en ${request.method} ${route}.`);
     }
 
     response.status(statusCode).json({

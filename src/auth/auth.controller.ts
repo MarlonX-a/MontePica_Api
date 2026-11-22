@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Ip,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -27,11 +28,56 @@ import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import {
+  PasswordRecoveryService,
+  RECOVERY_LIMITS,
+} from './password-recovery.service.js';
 
 @ApiTags('Autenticación')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly recovery: PasswordRecoveryService,
+  ) {}
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Solicita un código de recuperación por correo.',
+    description: `Máximo ${RECOVERY_LIMITS.ip} solicitudes por IP y ${RECOVERY_LIMITS.email} por correo cada hora. La respuesta es uniforme al superar el límite.`,
+  })
+  @ApiResponse({ status: 202, description: 'Solicitud recibida.' })
+  @ApiResponse({ status: 400, description: 'Correo con formato inválido.' })
+  @ApiResponse({
+    status: 503,
+    description: 'Recuperación por correo deshabilitada.',
+  })
+  forgotPassword(@Ip() ip: string, @Body() dto: ForgotPasswordDto) {
+    return this.recovery.request(dto.email, ip);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary:
+      'Cambia la contraseña con un código de un solo uso y revoca las sesiones.',
+  })
+  @ApiResponse({ status: 204, description: 'Contraseña actualizada.' })
+  @ApiResponse({ status: 400, description: 'Datos o código inválidos.' })
+  @ApiResponse({
+    status: 429,
+    description: `Máximo ${RECOVERY_LIMITS.reset} intentos por IP cada hora.`,
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Recuperación por correo deshabilitada.',
+  })
+  resetPassword(@Ip() ip: string, @Body() dto: ResetPasswordDto) {
+    return this.recovery.reset(dto.token, dto.newPassword, ip);
+  }
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)

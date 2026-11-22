@@ -8781,6 +8781,72 @@
           "Puntos"
         ]
       }
+    },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "description": "Máximo 20 solicitudes por IP y 3 por correo cada hora. La respuesta es uniforme al superar el límite.",
+        "operationId": "AuthController_forgotPassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Solicitud recibida."
+          },
+          "400": {
+            "description": "Correo con formato inválido."
+          },
+          "503": {
+            "description": "Recuperación por correo deshabilitada."
+          }
+        },
+        "summary": "Solicita un código de recuperación por correo.",
+        "tags": [
+          "Autenticación"
+        ]
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "operationId": "AuthController_resetPassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Contraseña actualizada."
+          },
+          "400": {
+            "description": "Datos o código inválidos."
+          },
+          "429": {
+            "description": "Máximo 20 intentos por IP cada hora."
+          },
+          "503": {
+            "description": "Recuperación por correo deshabilitada."
+          }
+        },
+        "summary": "Cambia la contraseña con un código de un solo uso y revoca las sesiones.",
+        "tags": [
+          "Autenticación"
+        ]
+      }
     }
   },
   "schemas": {
@@ -13203,6 +13269,40 @@
         "pendingPoints",
         "reservedPoints",
         "availablePoints"
+      ]
+    },
+    "ForgotPasswordDto": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "example": "maria@example.com",
+          "maxLength": 320
+        }
+      },
+      "required": [
+        "email"
+      ]
+    },
+    "ResetPasswordDto": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43,
+          "writeOnly": true
+        },
+        "newPassword": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "writeOnly": true
+        }
+      },
+      "required": [
+        "token",
+        "newPassword"
       ]
     }
   }

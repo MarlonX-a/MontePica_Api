@@ -19,6 +19,12 @@ export function createDatabaseOptions(
     username: env.DB_USERNAME,
     password: env.DB_PASSWORD,
     database: env.DB_NAME,
+    ssl: env.DB_TLS
+      ? {
+          rejectUnauthorized: true,
+          ...(env.DB_TLS_CA ? { ca: env.DB_TLS_CA } : {}),
+        }
+      : false,
     entities: databaseEntities,
     migrations: [
       join(databaseDirectory, 'migrations/*{.ts,.js}').replaceAll('\\', '/'),

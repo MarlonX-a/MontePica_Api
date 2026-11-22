@@ -5,10 +5,12 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { parse } from 'dotenv';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { configureApp } from '../src/app.setup.js';
+import { PasswordRecoveryMailer } from '../src/auth/password-recovery-mailer.js';
+import { PasswordRecoveryWorker } from '../src/auth/password-recovery.worker.js';
 import { CatalogSeedService } from '../src/catalog/catalog-seed.service.js';
 import { ReceiptStorageService } from '../src/common/storage/receipt-storage.service.js';
 import { createCommandContext } from '../src/database/command-context.js';
@@ -35,6 +37,7 @@ import { PointsProgram1794700000000 } from '../src/database/migrations/179470000
 import { LocalRewards1794800000000 } from '../src/database/migrations/1794800000000-LocalRewards.js';
 import { CashRegisterClosures1794900000000 } from '../src/database/migrations/1794900000000-CashRegisterClosures.js';
 import { OperatingDayClosures1795000000000 } from '../src/database/migrations/1795000000000-OperatingDayClosures.js';
+import { PasswordRecovery1795100000000 } from '../src/database/migrations/1795100000000-PasswordRecovery.js';
 import { DeliveryExpiryService } from '../src/delivery/delivery-expiry.service.js';
 import {
   GuestSessionsService,
@@ -48,6 +51,9 @@ import { VisitsService } from '../src/visits/visits.service.js';
 
 // Opt-in only: credentials from .env are used against postgres to CREATE a fresh, disposable database.
 // Never connects to DB_NAME from .env. Requires CREATEDB; no migrations are applied to MontePica.
+if (process.env.CI && process.env.RUN_POSTGRES_E2E !== '1') {
+  throw new Error('CI debe ejecutar las pruebas E2E con PostgreSQL.');
+}
 describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
   'Table access against isolated PostgreSQL',
   () => {
@@ -66,16 +72,36 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
     let counter = 0;
     const receiptObjects = new Map<string, Buffer>();
     let receiptUnavailable = false;
+    const recoveryEmails = new Map<string, string>();
+    let smtpUnavailable = false;
     const http = () => app.getHttpServer();
     const auth = (token: string) => `Bearer ${token}`;
 
     beforeAll(async () => {
-      const credentials = parse(readFileSync('.env'));
+      const local = existsSync('.env') ? parse(readFileSync('.env')) : {};
+      const credentials = Object.fromEntries(
+        ['DB_HOST', 'DB_PORT', 'DB_USERNAME', 'DB_PASSWORD'].map((name) => [
+          name,
+          process.env[name] ?? local[name] ?? '',
+        ]),
+      );
       const env = {
         ...credentials,
         NODE_ENV: 'test',
         DB_NAME: databaseName,
         DB_LOGGING: 'false',
+        DB_TLS: 'false',
+        SWAGGER_ENABLED: 'true',
+        PASSWORD_RECOVERY_ENABLED: 'true',
+        SMTP_HOST: 'localhost',
+        SMTP_FROM: 'test@example.com',
+        SMTP_USER: '',
+        SMTP_PASSWORD: '',
+        TRANSFER_PAYMENTS_ENABLED: 'true',
+        S3_REGION: 'us-east-1',
+        S3_BUCKET: 'test-bucket',
+        S3_ACCESS_KEY_ID: 'test-only-key',
+        S3_SECRET_ACCESS_KEY: 'test-only-secret',
         JWT_ACCESS_SECRET: 'postgres-test-secret-at-least-32-bytes-long',
         CORS_ORIGINS: '',
       };
@@ -114,11 +140,13 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           LocalRewards1794800000000,
           CashRegisterClosures1794900000000,
           OperatingDayClosures1795000000000,
+          PasswordRecovery1795100000000,
         ],
       });
       await db.initialize();
       await db.runMigrations();
       // Empty-database up/down/up check; never revert a database containing user data.
+      await db.undoLastMigration();
       await db.undoLastMigration();
       await db.runMigrations();
       for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
@@ -129,6 +157,14 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       const module = await Test.createTestingModule({ imports: [AppModule] })
         .overrideProvider(DataSource)
         .useValue(db)
+        .overrideProvider(PasswordRecoveryMailer)
+        .useValue({
+          send(email: string, token: string) {
+            if (smtpUnavailable)
+              throw new Error('SMTP de prueba no disponible');
+            recoveryEmails.set(email, token);
+          },
+        })
         .overrideProvider(ReceiptStorageService)
         .useValue({
           prefix: 'test/receipts/',
@@ -207,6 +243,69 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         vi.unstubAllEnvs();
       }
     }, 30000);
+
+    it('restablece la contraseña con un único uso y revoca las sesiones', async () => {
+      const email = 'recovery@example.com';
+      const account = await request(http())
+        .post('/api/v1/auth/register')
+        .send({
+          name: 'Recuperación',
+          email,
+          password: 'Original1',
+          phone: '0991234567',
+          termsAccepted: true,
+        })
+        .expect(201);
+      const known = await request(http())
+        .post('/api/v1/auth/forgot-password')
+        .send({ email })
+        .expect(202);
+      const unknown = await request(http())
+        .post('/api/v1/auth/forgot-password')
+        .send({ email: 'unknown@example.com' })
+        .expect(202);
+      expect(known.text).toBe(unknown.text);
+      const worker = app.get(PasswordRecoveryWorker);
+      smtpUnavailable = true;
+      try {
+        await worker.processPending();
+        expect(recoveryEmails.size).toBe(0);
+      } finally {
+        smtpUnavailable = false;
+      }
+      await db.query(
+        'UPDATE recuperacion_envio SET siguiente_en=clock_timestamp() WHERE correo=$1',
+        [email],
+      );
+      await worker.processPending();
+      expect(recoveryEmails.has('unknown@example.com')).toBe(false);
+      const token = recoveryEmails.get(email);
+      expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      const reset = () =>
+        request(http())
+          .post('/api/v1/auth/reset-password')
+          .send({ token, newPassword: 'Updated123' });
+      const responses = await Promise.all([reset(), reset()]);
+      expect(responses.map((response) => response.status).sort()).toEqual([
+        204, 400,
+      ]);
+      await request(http())
+        .get('/api/v1/auth/me')
+        .set('Authorization', auth(account.body.accessToken))
+        .expect(401);
+      await request(http())
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: account.body.refreshToken })
+        .expect(401);
+      await request(http())
+        .post('/api/v1/auth/login')
+        .send({ email, password: 'Original1' })
+        .expect(401);
+      await request(http())
+        .post('/api/v1/auth/login')
+        .send({ email, password: 'Updated123' })
+        .expect(200);
+    }, 15000);
 
     async function fixture() {
       const table = await tables.createTable(`M${++counter}`, users.admin);

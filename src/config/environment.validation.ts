@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 export interface ValidatedEnvironment {
   NODE_ENV: 'development' | 'test' | 'production';
   PORT: number;
@@ -7,6 +9,17 @@ export interface ValidatedEnvironment {
   DB_PASSWORD: string;
   DB_NAME: string;
   DB_LOGGING: boolean;
+  DB_TLS: boolean;
+  DB_TLS_CA: string;
+  SWAGGER_ENABLED: boolean;
+  TRUST_PROXY: string[];
+  PASSWORD_RECOVERY_ENABLED: boolean;
+  SMTP_HOST: string;
+  SMTP_PORT: number;
+  SMTP_SECURE: boolean;
+  SMTP_USER: string;
+  SMTP_PASSWORD: string;
+  SMTP_FROM: string;
   CORS_ORIGINS: string[];
   JWT_ACCESS_SECRET: string;
   TRANSFER_PAYMENTS_ENABLED: boolean;
@@ -19,18 +32,18 @@ export interface ValidatedEnvironment {
   S3_FORCE_PATH_STYLE: boolean;
 }
 
-export type ValidatedDatabaseEnvironment = Omit<
+export type ValidatedDatabaseEnvironment = Pick<
   ValidatedEnvironment,
-  | 'CORS_ORIGINS'
-  | 'JWT_ACCESS_SECRET'
-  | 'TRANSFER_PAYMENTS_ENABLED'
-  | 'S3_REGION'
-  | 'S3_BUCKET'
-  | 'S3_ACCESS_KEY_ID'
-  | 'S3_SECRET_ACCESS_KEY'
-  | 'S3_ENDPOINT'
-  | 'S3_PREFIX'
-  | 'S3_FORCE_PATH_STYLE'
+  | 'NODE_ENV'
+  | 'PORT'
+  | 'DB_HOST'
+  | 'DB_PORT'
+  | 'DB_USERNAME'
+  | 'DB_PASSWORD'
+  | 'DB_NAME'
+  | 'DB_LOGGING'
+  | 'DB_TLS'
+  | 'DB_TLS_CA'
 >;
 
 function requiredString(
@@ -51,7 +64,11 @@ function integerValue(
   min: number,
   max: number,
 ): number {
-  if (value !== undefined && typeof value !== 'string' && typeof value !== 'number') {
+  if (
+    value !== undefined &&
+    typeof value !== 'string' &&
+    typeof value !== 'number'
+  ) {
     throw new TypeError(`La variable ${name} debe ser un número entero.`);
   }
   const raw =
@@ -126,6 +143,9 @@ export function validateDatabaseEnvironment(
   const databaseUsername = requiredString(raw.DB_USERNAME, 'DB_USERNAME');
   const databaseName = requiredString(raw.DB_NAME, 'DB_NAME');
   const databasePassword = requiredString(raw.DB_PASSWORD, 'DB_PASSWORD');
+  const dbTls = booleanValue(raw.DB_TLS, 'DB_TLS', nodeEnv === 'production');
+  if (nodeEnv === 'production' && !dbTls)
+    throw new Error('DB_TLS debe estar habilitado en producción.');
   if (databasePassword === 'cambia_esta_clave_local') {
     throw new Error(
       'Reemplaza DB_PASSWORD con la contraseña configurada en PostgreSQL.',
@@ -141,6 +161,79 @@ export function validateDatabaseEnvironment(
     DB_PASSWORD: databasePassword,
     DB_NAME: databaseName,
     DB_LOGGING: booleanValue(raw.DB_LOGGING, 'DB_LOGGING', false),
+    DB_TLS: dbTls,
+    DB_TLS_CA: requiredString(raw.DB_TLS_CA, 'DB_TLS_CA', '').replaceAll(
+      '\\n',
+      '\n',
+    ),
+  };
+}
+
+function proxyAddresses(value: unknown): string[] {
+  const addresses = requiredString(value, 'TRUST_PROXY', '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const entry of addresses) {
+    const [address, prefix, ...extra] = entry.split('/');
+    const family = isIP(address);
+    if (
+      !family ||
+      extra.length ||
+      (prefix !== undefined &&
+        (!/^\d+$/.test(prefix) ||
+          Number(prefix) < 1 ||
+          Number(prefix) > (family === 4 ? 32 : 128)))
+    ) {
+      throw new Error(
+        'TRUST_PROXY debe contener IP o CIDR de proxies confiables.',
+      );
+    }
+  }
+  return addresses;
+}
+
+function recoveryEnvironment(
+  raw: Record<string, unknown>,
+  production: boolean,
+) {
+  const enabled = booleanValue(
+    raw.PASSWORD_RECOVERY_ENABLED,
+    'PASSWORD_RECOVERY_ENABLED',
+    production,
+  );
+  const host = requiredString(
+    raw.SMTP_HOST,
+    'SMTP_HOST',
+    enabled ? undefined : '',
+  );
+  const from = requiredString(
+    raw.SMTP_FROM,
+    'SMTP_FROM',
+    enabled ? undefined : '',
+  );
+  const secure = booleanValue(raw.SMTP_SECURE, 'SMTP_SECURE', false);
+  const user = requiredString(raw.SMTP_USER, 'SMTP_USER', '');
+  const password =
+    typeof raw.SMTP_PASSWORD === 'string' ? raw.SMTP_PASSWORD : '';
+  if (enabled && !!user !== !!password)
+    throw new Error('Configura SMTP_USER y SMTP_PASSWORD juntos.');
+  if (enabled && !/^[^\s<>,@]+@[^\s<>,@]+\.[^\s<>,@]+$/.test(from))
+    throw new Error('SMTP_FROM debe contener una sola dirección de correo.');
+  return {
+    PASSWORD_RECOVERY_ENABLED: enabled,
+    SMTP_HOST: host,
+    SMTP_PORT: integerValue(
+      raw.SMTP_PORT,
+      'SMTP_PORT',
+      secure ? 465 : 587,
+      1,
+      65535,
+    ),
+    SMTP_SECURE: secure,
+    SMTP_USER: user,
+    SMTP_PASSWORD: password,
+    SMTP_FROM: from,
   };
 }
 
@@ -148,6 +241,10 @@ export function validateEnvironment(
   raw: Record<string, unknown>,
 ): ValidatedEnvironment {
   const database = validateDatabaseEnvironment(raw);
+  const production = database.NODE_ENV === 'production';
+  const origins = originsValue(raw.CORS_ORIGINS);
+  if (production && origins.some((origin) => !origin.startsWith('https://')))
+    throw new Error('CORS_ORIGINS solo admite orígenes HTTPS en producción.');
   const jwtAccessSecret = requiredString(
     raw.JWT_ACCESS_SECRET,
     'JWT_ACCESS_SECRET',
@@ -183,10 +280,11 @@ export function validateEnvironment(
     if (
       !['http:', 'https:'].includes(url.protocol) ||
       url.username ||
-      url.password
+      url.password ||
+      (production && url.protocol !== 'https:')
     )
       throw new Error(
-        'S3_ENDPOINT debe ser una URL HTTP o HTTPS sin credenciales.',
+        'S3_ENDPOINT debe ser una URL sin credenciales y usar HTTPS en producción.',
       );
   }
   const prefix = requiredString(
@@ -199,7 +297,14 @@ export function validateEnvironment(
 
   return {
     ...database,
-    CORS_ORIGINS: originsValue(raw.CORS_ORIGINS),
+    ...recoveryEnvironment(raw, production),
+    CORS_ORIGINS: origins,
+    SWAGGER_ENABLED: booleanValue(
+      raw.SWAGGER_ENABLED,
+      'SWAGGER_ENABLED',
+      !production,
+    ),
+    TRUST_PROXY: proxyAddresses(raw.TRUST_PROXY),
     JWT_ACCESS_SECRET: jwtAccessSecret,
     TRANSFER_PAYMENTS_ENABLED: enabled,
     S3_REGION: readS3('S3_REGION'),

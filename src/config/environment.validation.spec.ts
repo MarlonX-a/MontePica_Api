@@ -21,6 +21,17 @@ describe('validateEnvironment', () => {
       DB_PORT: 5432,
       ...required,
       DB_LOGGING: false,
+      DB_TLS: false,
+      DB_TLS_CA: '',
+      SWAGGER_ENABLED: true,
+      TRUST_PROXY: [],
+      PASSWORD_RECOVERY_ENABLED: false,
+      SMTP_HOST: '',
+      SMTP_PORT: 587,
+      SMTP_SECURE: false,
+      SMTP_USER: '',
+      SMTP_PASSWORD: '',
+      SMTP_FROM: '',
       CORS_ORIGINS: ['http://localhost:8081'],
       JWT_ACCESS_SECRET: required.JWT_ACCESS_SECRET,
       TRANSFER_PAYMENTS_ENABLED: false,
@@ -69,5 +80,28 @@ describe('validateEnvironment', () => {
     expect(() =>
       validateEnvironment({ ...required, JWT_ACCESS_SECRET: 'short' }),
     ).toThrow('JWT_ACCESS_SECRET debe tener al menos 32 bytes');
+  });
+
+  it('requires verified database TLS and validates proxy and mail settings in production', () => {
+    const prod = { ...required, NODE_ENV: 'production' };
+    expect(() => validateEnvironment({ ...prod, DB_TLS: 'false' })).toThrow(
+      'DB_TLS',
+    );
+    expect(() => validateEnvironment(prod)).toThrow('SMTP_HOST');
+    const mail = {
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_FROM: 'access@example.com',
+    };
+    expect(() =>
+      validateEnvironment({ ...prod, ...mail, TRUST_PROXY: '0.0.0.0/0' }),
+    ).toThrow('TRUST_PROXY');
+    expect(
+      validateEnvironment({ ...prod, ...mail, TRUST_PROXY: '10.0.0.0/24' }),
+    ).toMatchObject({
+      DB_TLS: true,
+      SWAGGER_ENABLED: false,
+      PASSWORD_RECOVERY_ENABLED: true,
+      TRUST_PROXY: ['10.0.0.0/24'],
+    });
   });
 });

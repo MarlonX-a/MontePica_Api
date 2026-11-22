@@ -47,6 +47,8 @@ import { VisitsModule } from './visits/visits.module.js';
           DB_PASSWORD: config.getOrThrow('DB_PASSWORD'),
           DB_NAME: config.getOrThrow('DB_NAME'),
           DB_LOGGING: config.get('DB_LOGGING'),
+          DB_TLS: config.get('DB_TLS'),
+          DB_TLS_CA: config.get('DB_TLS_CA'),
         }),
         retryAttempts: 3,
         retryDelay: 1000,

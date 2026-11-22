@@ -2,11 +2,18 @@ import { type INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter.js';
+import { type Express } from 'express';
 
 export function configureApp(app: INestApplication): void {
+  const config = app.get(ConfigService);
+  const trustedProxies = config.get<string[]>('TRUST_PROXY', []);
+  if (trustedProxies.length) {
+    const express: Express = app.getHttpAdapter().getInstance();
+    express.set('trust proxy', trustedProxies);
+  }
   app.setGlobalPrefix('api/v1');
   app.enableCors({
-    origin: app.get(ConfigService).get<string[]>('CORS_ORIGINS', []),
+    origin: config.get<string[]>('CORS_ORIGINS', []),
   });
   app.useGlobalPipes(
     new ValidationPipe({
@@ -16,6 +23,13 @@ export function configureApp(app: INestApplication): void {
     }),
   );
   app.useGlobalFilters(new ApiExceptionFilter());
+  if (
+    !config.get<boolean>(
+      'SWAGGER_ENABLED',
+      config.get('NODE_ENV') !== 'production',
+    )
+  )
+    return;
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('MontePica API')

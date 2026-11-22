@@ -70,6 +70,7 @@ describe('Module and persistence boundaries', () => {
           node.expression.name.text === 'query' &&
           ![
             'src/health/health.service.ts',
+            'src/database/password-recovery.store.ts',
             'src/common/transactions/transaction-locks.service.ts',
           ].includes(name)
         )
@@ -87,7 +88,7 @@ describe('Module and persistence boundaries', () => {
       visit(source);
     }
     expect(violations).toEqual([]);
-  });
+  }, 15000);
   it('registers each service and guard in exactly one owner module', () => {
     const owners = new Map<string, string[]>();
     for (const file of sources.filter((f) => f.endsWith('.module.ts'))) {

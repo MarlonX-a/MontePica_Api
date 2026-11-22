@@ -1,6 +1,6 @@
 # MontePica Backend
 
-API REST construida con NestJS, PostgreSQL y TypeORM. Incluye autenticación, catálogo, operación diaria, inventario, mesas, pedidos locales y a domicilio, pagos, devoluciones, puntos, canjes y cierres de caja y jornada hasta la etapa 11B. Swagger está disponible en `/docs`.
+API REST construida con NestJS, PostgreSQL y TypeORM. Incluye autenticación, catálogo, operación diaria, inventario, mesas, pedidos locales y a domicilio, pagos, devoluciones, puntos, canjes y cierres de caja y jornada. Para recuperar una contraseña, preparar el despliegue o restaurar un respaldo, consulta la [guía de despliegue y recuperación](docs/deployment.md). Swagger está disponible en `/docs` en desarrollo.
 
 ## Requisitos
 
