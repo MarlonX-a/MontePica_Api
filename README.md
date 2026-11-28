@@ -547,3 +547,11 @@ npm run test:e2e
 ```
 
 La suite unitaria verifica reglas y límites de arquitectura: ausencia de repositorios propios, persistencia fuera de controladores y guards, proveedores con un único propietario y módulos sin ciclos. La suite E2E crea y elimina una base PostgreSQL temporal, simula S3, verifica migraciones y compara los mapeos TypeORM con el esquema migrado sin diferencias. Las credenciales deben permitir crear esa base temporal; `MontePica` no es el destino de las migraciones ni de los datos de prueba. No ejecutes un build que borre `dist` mientras esté activo el servidor en vigilancia.
+
+## Avisos de cobertura a domicilio
+
+El cliente autenticado registra su token de Expo con `PUT /api/v1/me/push-device` y puede retirarlo con `DELETE /api/v1/me/push-device`. El registro pertenece a la sesión. Cada token se asocia a una sola sesión y se comprueba la vigencia de la cuenta antes del envío.
+
+La migración `1795200000000-DeliveryPush` crea el registro de dispositivos y la cola de avisos. Aplicar las migraciones antes de iniciar la versión nueva del backend. La aprobación o el rechazo registra el evento en la transacción de la decisión. El trabajador de NestJS procesa los envíos después, guarda los tickets de Expo, comprueba los recibos y desactiva registros que devuelvan `DeviceNotRegistered`. Un recibo aceptado confirma la entrega al proveedor, y la prueba en el teléfono confirma la recepción.
+
+Si la seguridad de push de Expo está activada, configurar `EXPO_PUSH_ACCESS_TOKEN` en el entorno del backend. La clave privada de la cuenta FCM V1 se administra en las credenciales de EAS. Las pruebas E2E usan PostgreSQL desechable y simulan Expo para comprobar reintento, idempotencia, revocación y cambio de cuenta.

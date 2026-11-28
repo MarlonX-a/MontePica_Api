@@ -38,7 +38,11 @@ import { LocalRewards1794800000000 } from '../src/database/migrations/1794800000
 import { CashRegisterClosures1794900000000 } from '../src/database/migrations/1794900000000-CashRegisterClosures.js';
 import { OperatingDayClosures1795000000000 } from '../src/database/migrations/1795000000000-OperatingDayClosures.js';
 import { PasswordRecovery1795100000000 } from '../src/database/migrations/1795100000000-PasswordRecovery.js';
+import { DeliveryPush1795200000000 } from '../src/database/migrations/1795200000000-DeliveryPush.js';
 import { DeliveryExpiryService } from '../src/delivery/delivery-expiry.service.js';
+import { DeliveryPushStore } from '../src/database/delivery-push.store.js';
+import { DeliveryPushWorker } from '../src/delivery/delivery-push.worker.js';
+import { ExpoPushGateway } from '../src/delivery/expo-push.gateway.js';
 import {
   GuestSessionsService,
   hashAccessSecret,
@@ -141,6 +145,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
           CashRegisterClosures1794900000000,
           OperatingDayClosures1795000000000,
           PasswordRecovery1795100000000,
+          DeliveryPush1795200000000,
         ],
       });
       await db.initialize();
@@ -157,6 +162,8 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
       const module = await Test.createTestingModule({ imports: [AppModule] })
         .overrideProvider(DataSource)
         .useValue(db)
+        .overrideProvider(DeliveryPushWorker)
+        .useValue({})
         .overrideProvider(PasswordRecoveryMailer)
         .useValue({
           send(email: string, token: string) {
@@ -1086,6 +1093,19 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         )
         .set('Authorization', auth(tokens.worker))
         .expect(200);
+      const device = { expoPushToken: 'ExponentPushToken[delivery-test]' };
+      const putDevice = (token: string) => request(http())
+        .put('/api/v1/me/push-device').set('Authorization', auth(token)).send(device);
+      await putDevice(tokens.worker).expect(403);
+      await request(http()).put('/api/v1/me/push-device')
+        .set('Authorization', auth(tokens.client)).send({ expoPushToken: 'invalid' }).expect(400);
+      await putDevice(otherToken).expect(204);
+      await putDevice(tokens.client).expect(204);
+      await putDevice(tokens.client).expect(204);
+      const registrations = await db.query('SELECT id_sesion FROM dispositivo_push');
+      expect(registrations).toHaveLength(1);
+      expect(registrations[0].id_sesion).not.toBe(otherSession.id_sesion_usuario);
+
       const approved = await request(http())
         .post(`/api/v1/admin/delivery-requests/${created.body.id}/approve`)
         .set('Authorization', auth(tokens.worker))
@@ -1093,6 +1113,43 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .send({})
         .expect(200);
       expect(approved.body.usableToday).toBe(true);
+      await request(http())
+        .post(`/api/v1/admin/delivery-requests/${created.body.id}/approve`)
+        .set('Authorization', auth(tokens.worker))
+        .set('Idempotency-Key', 'delivery-approve')
+        .send({})
+        .expect(200);
+      expect(await db.query('SELECT resultado FROM evento_push_domicilio WHERE id_solicitud = $1', [created.body.id]))
+        .toEqual([{ resultado: 'approved' }]);
+      const pushStore = app.get(DeliveryPushStore);
+      const expo = new ExpoPushGateway();
+      const send = vi.spyOn(expo, 'send').mockRejectedValueOnce(new Error('Expo no disponible'))
+        .mockResolvedValueOnce({ status: 'ok', id: 'ticket-prueba' });
+      const receipt = vi.spyOn(expo, 'receipt').mockResolvedValue({
+        status: 'error',
+        details: { error: 'DeviceNotRegistered' },
+      });
+      const pushWorker = new DeliveryPushWorker(pushStore, expo);
+      const firstPush = await pushStore.claim();
+      expect(firstPush).toBeDefined();
+      await pushWorker.process(firstPush!);
+      expect(await pushStore.claim()).toBeUndefined();
+      const [retryRow] = await db.query('SELECT estado, siguiente_en > clock_timestamp() AS delayed FROM envio_push_domicilio WHERE id = $1', [firstPush!.id]);
+      expect(retryRow).toEqual({ estado: 'pending', delayed: true });
+      const makePushDue = () => db.query('UPDATE envio_push_domicilio SET siguiente_en = now() WHERE id = $1', [firstPush!.id]);
+      await makePushDue();
+      const [retryPush, parallelClaim] = await Promise.all([pushStore.claim(), pushStore.claim()]);
+      expect([retryPush, parallelClaim].filter(Boolean)).toHaveLength(1);
+      await pushWorker.process((retryPush ?? parallelClaim)!);
+      await makePushDue();
+      await pushWorker.process((await pushStore.claim())!);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(receipt).toHaveBeenCalledWith('ticket-prueba');
+      expect(await db.query('SELECT id FROM dispositivo_push')).toHaveLength(0);
+      await putDevice(otherToken).expect(204);
+      await request(http()).delete('/api/v1/me/push-device')
+        .set('Authorization', auth(otherToken)).expect(204);
+      expect(await db.query('SELECT id FROM dispositivo_push')).toHaveLength(0);
       await request(http())
         .put('/api/v1/admin/delivery/settings')
         .set('Authorization', auth(tokens.admin))
@@ -1135,6 +1192,7 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Authorization', auth(tokens.client))
         .expect(200);
       expect(afterFailure.body.status).toBe('pending');
+      expect(await db.query('SELECT id FROM evento_push_domicilio WHERE id_solicitud = $1', [pending.body.id])).toHaveLength(0);
       const [approve, cancel] = await Promise.all([
         request(http())
           .post(`/api/v1/admin/delivery-requests/${pending.body.id}/approve`)
@@ -1170,12 +1228,31 @@ describe.skipIf(process.env.RUN_POSTGRES_E2E !== '1')(
         .set('Idempotency-Key', 'delivery-stale-approve')
         .send({})
         .expect(409);
+      const [secondSession] = await db.query(
+        `INSERT INTO sesion_usuario(id_usuario,refresh_hash,expira_en)
+         VALUES ($1,$2,now()+interval '1 day') RETURNING id_sesion_usuario`,
+        [users.client, hashAccessSecret(randomUUID())],
+      );
+      const secondToken = await app.get(JwtService).signAsync({
+        sub: users.client,
+        sid: secondSession.id_sesion_usuario,
+        av: 0,
+      });
+      await putDevice(secondToken).expect(204);
       await request(http())
         .post(`/api/v1/admin/delivery-requests/${stale.body.id}/reject`)
         .set('Authorization', auth(tokens.worker))
         .set('Idempotency-Key', 'delivery-stale-reject')
         .send({ reason: 'Cobertura actualizada' })
         .expect(200);
+      expect(await db.query('SELECT resultado FROM evento_push_domicilio WHERE id_solicitud = $1', [stale.body.id]))
+        .toEqual([{ resultado: 'rejected' }]);
+      await db.query('UPDATE sesion_usuario SET revocada_en = now() WHERE id_sesion_usuario = $1', [secondSession.id_sesion_usuario]);
+      const rejectedPush = await pushStore.claim();
+      expect(rejectedPush?.decision).toBe('rejected');
+      await pushWorker.process(rejectedPush!);
+      expect(send).toHaveBeenCalledTimes(2);
+      await putDevice(secondToken).expect(401);
       const historic = await submit(
         { ...body, configurationVersion: 4 },
         'delivery-historic-create',

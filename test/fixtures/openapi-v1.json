@@ -2004,6 +2004,30 @@
         ]
       }
     },
+    "/api/v1/me/push-device": {
+      "put": {
+        "operationId": "PushDeviceController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PushDeviceDto" }
+            }
+          }
+        },
+        "responses": { "204": { "description": "" } },
+        "security": [{ "client-token": [] }],
+        "tags": ["Dispositivo push"]
+      },
+      "delete": {
+        "operationId": "PushDeviceController_unregister",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "security": [{ "client-token": [] }],
+        "tags": ["Dispositivo push"]
+      }
+    },
     "/api/v1/me/redemptions": {
       "get": {
         "operationId": "ClientRedemptionsController_list",
@@ -12775,6 +12799,16 @@
         "shippingFeeCents",
         "currency"
       ]
+    },
+    "PushDeviceDto": {
+      "type": "object",
+      "properties": {
+        "expoPushToken": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": ["expoPushToken"]
     },
     "DeliveryRequestDto": {
       "type": "object",

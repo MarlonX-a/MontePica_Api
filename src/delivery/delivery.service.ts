@@ -16,6 +16,7 @@ import { OperationalContextService } from '../common/transactions/operational-co
 import { OperatingDay } from '../operations/entities/operating-day.entity.js';
 import { OperationsSettings } from '../operations/entities/operations-settings.entity.js';
 import { ParticipantsService } from '../participants/participants.service.js';
+import { DeliveryPushStore } from '../database/delivery-push.store.js';
 import { type AdminDeliveryListDto } from './dto/admin-delivery-list.dto.js';
 import { type DeliveryListDto } from './dto/delivery-list.dto.js';
 import { type DeliveryRequestDto } from './dto/delivery-request.dto.js';
@@ -43,6 +44,7 @@ export class DeliveryService {
     private readonly auditLog: AuditService,
     private readonly operationalContext: OperationalContextService,
     private readonly authorization: AuthorizationService,
+    private readonly push: DeliveryPushStore,
   ) {}
 
   private async staff(
@@ -265,6 +267,9 @@ export class DeliveryService {
             reason: reason ?? null,
           });
           const response = await this.detail(id, client?.clientId, m);
+          if (status === 'approved' || status === 'rejected') {
+            await this.push.enqueue(m, id, response.clientId, status);
+          }
           await this.auditLog.append(
             m,
             { userId: actor.userId },

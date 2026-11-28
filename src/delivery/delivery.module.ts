@@ -14,6 +14,10 @@ import { DeliveryExpiryService } from './delivery-expiry.service.js';
 import { DeliveryLifecycleModule } from './delivery-lifecycle.module.js';
 import { DeliveryPublicController } from './delivery-public.controller.js';
 import { DeliveryService } from './delivery.service.js';
+import { DeliveryPushStore } from '../database/delivery-push.store.js';
+import { DeliveryPushWorker } from './delivery-push.worker.js';
+import { ExpoPushGateway } from './expo-push.gateway.js';
+import { PushDeviceController } from './push-device.controller.js';
 import { DeliveryRequest } from './entities/delivery-request.entity.js';
 
 @Module({
@@ -33,8 +37,9 @@ import { DeliveryRequest } from './entities/delivery-request.entity.js';
     AdminDeliveryController,
     ClientDeliveryController,
     DeliveryPublicController,
+    PushDeviceController,
   ],
-  providers: [DeliveryExpiryService, DeliveryService],
+  providers: [DeliveryExpiryService, DeliveryService, DeliveryPushStore, DeliveryPushWorker, ExpoPushGateway],
   exports: [DeliveryExpiryService, DeliveryService],
 })
 export class DeliveryModule {}

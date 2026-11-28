@@ -71,6 +71,8 @@ describe('Module and persistence boundaries', () => {
           ![
             'src/health/health.service.ts',
             'src/database/password-recovery.store.ts',
+            // The durable push queue uses PostgreSQL row claims and a serialized device registry.
+            'src/database/delivery-push.store.ts',
             'src/common/transactions/transaction-locks.service.ts',
           ].includes(name)
         )
